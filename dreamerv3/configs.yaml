@@ -35,11 +35,13 @@ defaults:
     minecraft: {size: [64, 64], break_speed: 100.0, logs: False, length: 36000}
     dmc: {size: [64, 64], repeat: 1, proprio: True, image: True, camera: -1}
     loconav: {size: [64, 64], repeat: 1, camera: -1}
+    robodesk: {size: [64, 64], repeat: 1, reward: dense, length: 500, pooling: 2, aggregate: max, clip_reward: False,
+                seed: 12345}
 
   replay:
     size: 5e6
     online: True
-    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
+    fracs: {uniform: 0.0, priority: 1.0, recency: 0.0}
     prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
@@ -173,6 +175,10 @@ atari100k:
 
 crafter:
   task: crafter_reward
+  run: {steps: 1.1e6, envs: 1, train_ratio: 512}
+
+robodesk:
+  task: robodesk_open_slide
   run: {steps: 1.1e6, envs: 1, train_ratio: 512}
 
 dmc_proprio:

@@ -55,7 +55,7 @@ class RoboDesk(embodied.Env):
     @property
     def act_space(self):
         return {
-            'action': self._env.action_space,
+            'action': elements.Space(np.float32, (5,)),
             'reset': elements.Space(bool),
         }
 
@@ -121,3 +121,6 @@ class RoboDesk(embodied.Env):
 
     def sample_valid_action(self):
         return self._env.action_space.sample()
+
+    def render(self, **kwargs):
+        return self._env.render(**kwargs)

@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
-from embodied.jax.outs import Agg
 
 from . import rssm
 
@@ -61,7 +60,7 @@ class Agent(embodied.jax.Agent):
     d1, d2 = config.policy_dist_disc, config.policy_dist_cont
     outs = {k: d1 if v.discrete else d2 for k, v in act_space.items()}
     self.pol = embodied.jax.MLPHead(
-        act_space, outs, **config.policy, name='pol')
+        act_space, outs, **config.policy, name='pol') # We can create with outs a DictHead output for multiple actions
 
     self.val = embodied.jax.MLPHead(scalar, **config.value, name='val')
     self.slowval = embodied.jax.SlowModel(
@@ -145,7 +144,7 @@ class Agent(embodied.jax.Agent):
     self.slowval.update()
     outs = {}
     if self.config.replay_context:
-      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"])
+      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"], metrics["ret_prio"])
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2], priority=priorities))
       B, T = obs['is_first'].shape
@@ -169,7 +168,7 @@ class Agent(embodied.jax.Agent):
     enc_carry, enc_entries, tokens = self.enc(
         enc_carry, obs, reset, training)
     dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-        dyn_carry, tokens, prevact, reset, training)
+        dyn_carry, tokens, prevact, reset, training) # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
     losses.update(los)
     metrics.update(mets)
     dec_carry, dec_entries, recons = self.dec(
@@ -187,12 +186,12 @@ class Agent(embodied.jax.Agent):
       losses[key] = recon.loss(sg(target))
       B, T = reset.shape
 
-    # Imagination #TODO Understand
+    # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
     K = min(self.config.imag_last or T, T)
     H = self.config.imag_length # Imagination horizon
-    starts = self.dyn.starts(dyn_entries, dyn_carry, K)
+    starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
-    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
+    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
     first = jax.tree.map(
         lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
     imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
@@ -398,17 +397,17 @@ def imag_loss(
   metrics = {}
 
   voffset, vscale = valnorm.stats()
-  val = value.pred() * vscale + voffset
+  val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
   slowval = slowvalue.pred() * vscale + voffset
   tarval = slowval if slowtar else val
   disc = 1 if contdisc else 1 - 1 / horizon
   weight = jnp.cumprod(disc * con, 1) / disc
   last = jnp.zeros_like(con)
   term = 1 - con
-  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam)
+  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam) # target lambda return
 
   roffset, rscale = retnorm(ret, update)
-  adv = (ret - tarval[:, :-1]) / rscale
+  adv = (ret - tarval[:, :-1]) / rscale # advantage as difference between return and value (normalized) ignoring the last step (because we have no return for the last step)
   aoffset, ascale = advnorm(adv, update)
   adv_normed = (adv - aoffset) / ascale
   logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
@@ -417,12 +416,12 @@ def imag_loss(
       logpi * sg(adv_normed) + actent * sum(ents.values()))
   losses['policy'] = policy_loss
 
-  voffset, vscale = valnorm(ret, update)
+  voffset, vscale = valnorm(ret, update) # this is important now. Here we can extract the value loss
   tar_normed = (ret - voffset) / vscale
   tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
   losses['value'] = sg(weight[:, :-1]) * (
       value.loss(sg(tar_padded)) +
-      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
+      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1] # we extract the value loss here and store it
 
   ret_normed = (ret - roffset) / rscale
   metrics['adv'] = adv.mean()
@@ -433,6 +432,7 @@ def imag_loss(
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()
   metrics['val_prio'] = sg(losses['value']).copy()
+  metrics["ret_prio"] = ret_normed.copy()
   metrics['tar'] = tar_normed.mean()
   metrics['weight'] = weight.mean()
   metrics['slowval'] = slowval.mean()
@@ -482,9 +482,32 @@ def repl_loss(
 
   return losses, outs, metrics
 
-def compute_priority(reconstruction_losses: jnp.array, value_losses: jnp.array) -> jnp.array:
-  #TODO - how tf do we incorporate value losses of imagined trajectories
-  return reconstruction_losses
+def compute_priority(reconstruction_losses: jnp.array,
+                     value_losses: jnp.array,
+                     returns: jnp.array,
+                     lambda_r: float = 0.1,
+                     lambda_delta: float = 0.4,
+                     lambda_recon: float = 0.5) -> jnp.array:
+  B, T = reconstruction_losses.shape
+  BK, H = value_losses.shape
+
+  if B*T == BK:
+    priorities = ((lambda_recon * reconstruction_losses) + (lambda_r + lambda_delta *
+                                                           value_losses.reshape(B,T,H).mean(axis=-1)) *
+                  returns.reshape(B, T, H).sum(axis=-1))
+    return priorities
+
+  K = BK // B
+  value_losses = value_losses.reshape(B, K, H)
+  padding = jnp.zeros((B, T - K, H))
+  value_losses = jnp.concatenate([padding, value_losses], axis=1)
+  returns = jnp.concatenate([padding.copy(), returns.reshape(B, K, H)], axis=1)
+  priorities = ((lambda_recon * reconstruction_losses) +
+                (lambda_r + lambda_delta * value_losses.mean(axis=-1)) *
+                returns.sum(axis=-1))
+
+  return priorities
+
 
 def lambda_return(last, term, rew, val, boot, disc, lam):
   chex.assert_equal_shape((last, term, rew, val, boot))

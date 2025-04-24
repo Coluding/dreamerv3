@@ -150,7 +150,7 @@ class Prioritized:
         print('Ignoring priority update for removed time step.')
     items = []
     for stepid in stepids:
-      items += self.stepitems[stepid]
+      items += self.stepitems[stepid] # HERE ARE THE STEPS: defaultdict step_id: steps (65 steps)
     for key in list(set(items)):
       try:
         self.tree.update(key, self._aggregate(key))

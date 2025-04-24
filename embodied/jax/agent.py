@@ -34,7 +34,6 @@ class Options:
 
 
 class Agent(embodied.Agent):
-
   def __new__(subcls, obs_space, act_space, config):
     keys = Options.__dataclass_fields__
     options = {k: v for k, v in config.jax.items() if k in keys}

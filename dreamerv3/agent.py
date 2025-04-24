@@ -1,5 +1,5 @@
 import re
-
+from typing import Dict
 import chex
 import elements
 import embodied.jax
@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
+from embodied.jax.outs import Agg
 
 from . import rssm
 
@@ -82,6 +83,8 @@ class Agent(embodied.jax.Agent):
     scales.update({k: rec for k in dec_space})
     self.scales = scales
 
+    self.priority_collector = {}
+
   @property
   def policy_keys(self):
     return '^(enc|dyn|dec|pol)/'
@@ -134,7 +137,7 @@ class Agent(embodied.jax.Agent):
           enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
     return carry, act, out
 
-  def train(self, carry, data):
+  def train(self, carry, data): # need to go in here
     carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
     metrics, (carry, entries, outs, mets) = self.opt(
         self.loss, carry, obs, prevact, training=True, has_aux=True)
@@ -142,8 +145,9 @@ class Agent(embodied.jax.Agent):
     self.slowval.update()
     outs = {}
     if self.config.replay_context:
+      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"])
       updates = elements.tree.flatdict(dict(
-          stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2]))
+          stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2], priority=priorities))
       B, T = obs['is_first'].shape
       assert all(x.shape[:2] == (B, T) for x in updates.values()), (
           (B, T), {k: v.shape for k, v in updates.items()})
@@ -152,6 +156,7 @@ class Agent(embodied.jax.Agent):
     #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
+
 
   def loss(self, carry, obs, prevact, training):
     enc_carry, dyn_carry, dec_carry = carry
@@ -180,14 +185,11 @@ class Agent(embodied.jax.Agent):
       assert value.dtype == space.dtype, (key, space, value.dtype)
       target = f32(value) / 255 if isimage(space) else value
       losses[key] = recon.loss(sg(target))
+      B, T = reset.shape
 
-    B, T = reset.shape
-    shapes = {k: v.shape for k, v in losses.items()}
-    assert all(x == (B, T) for x in shapes.values()), ((B, T), shapes)
-
-    # Imagination
+    # Imagination #TODO Understand
     K = min(self.config.imag_last or T, T)
-    H = self.config.imag_length
+    H = self.config.imag_length # Imagination horizon
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
@@ -236,6 +238,7 @@ class Agent(embodied.jax.Agent):
 
     assert set(losses.keys()) == set(self.scales.keys()), (
         sorted(losses.keys()), sorted(self.scales.keys()))
+    metrics['image_prio'] = sg(losses['image']).copy()
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 
@@ -429,6 +432,7 @@ def imag_loss(
   metrics['con'] = con.mean()
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()
+  metrics['val_prio'] = sg(losses['value']).copy()
   metrics['tar'] = tar_normed.mean()
   metrics['weight'] = weight.mean()
   metrics['slowval'] = slowval.mean()
@@ -478,6 +482,9 @@ def repl_loss(
 
   return losses, outs, metrics
 
+def compute_priority(reconstruction_losses: jnp.array, value_losses: jnp.array) -> jnp.array:
+  #TODO - how tf do we incorporate value losses of imagined trajectories
+  return reconstruction_losses
 
 def lambda_return(last, term, rew, val, boot, disc, lam):
   chex.assert_equal_shape((last, term, rew, val, boot))

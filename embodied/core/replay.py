@@ -22,7 +22,7 @@ class Replay:
     self.chunksize = chunksize
     self.name = name
 
-    self.sampler = selector or selectors.Uniform(seed)
+    self.sampler = selectors.Prioritized() #selector or selectors.Uniform(seed)
 
     self.chunks = {}
     self.refs = {}
@@ -74,7 +74,7 @@ class Replay:
     return stats
 
   @elements.timer.section('replay_add')
-  def add(self, step, worker=0):
+  def add(self, step: dict, worker=0):
     step = {k: v for k, v in step.items() if not k.startswith('log/')}
     with self.rwlock.reading:
       step = {k: np.asarray(v) for k, v in step.items()}
@@ -88,7 +88,7 @@ class Replay:
 
       chunkid, index = self.current[worker]
       step['stepid'] = np.frombuffer(
-          bytes(chunkid) + index.to_bytes(4, 'big'), np.uint8)
+          bytes(chunkid) + index.to_bytes(4, 'big'), np.uint8) # create an unique id for the step in the chunk
       stream = self.streams[worker]
       chunk = self.chunks[chunkid]
       assert chunk.length == index, (chunk.length, index)
@@ -118,7 +118,7 @@ class Replay:
         self.lengths[worker] += 1
 
   @elements.timer.section('replay_sample')
-  def sample(self, batch, mode='train'):
+  def sample(self, batch: int, mode='train'):
     message = f'Replay buffer {self.name} is empty'
     limiters.wait(lambda: len(self.sampler), message)
     seqs, is_online = zip(*[self._sample(mode) for _ in range(batch)])

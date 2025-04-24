@@ -144,7 +144,7 @@ class Agent(embodied.jax.Agent):
     self.slowval.update()
     outs = {}
     if self.config.replay_context:
-      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"])
+      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"], metrics["ret_prio"])
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2], priority=priorities))
       B, T = obs['is_first'].shape
@@ -187,7 +187,7 @@ class Agent(embodied.jax.Agent):
       B, T = reset.shape
 
     # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
-    K = min(50 or T, T)# min(self.config.imag_last or T, T)
+    K = min(self.config.imag_last or T, T)
     H = self.config.imag_length # Imagination horizon
     starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
@@ -432,6 +432,7 @@ def imag_loss(
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()
   metrics['val_prio'] = sg(losses['value']).copy()
+  metrics["ret_prio"] = ret_normed.copy()
   metrics['tar'] = tar_normed.mean()
   metrics['weight'] = weight.mean()
   metrics['slowval'] = slowval.mean()
@@ -483,19 +484,27 @@ def repl_loss(
 
 def compute_priority(reconstruction_losses: jnp.array,
                      value_losses: jnp.array,
-                     lambda_prio: float = 0.5) -> jnp.array:
+                     returns: jnp.array,
+                     lambda_r: float = 0.1,
+                     lambda_delta: float = 0.4,
+                     lambda_recon: float = 0.5) -> jnp.array:
   B, T = reconstruction_losses.shape
   BK, H = value_losses.shape
 
   if B*T == BK:
-    priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses.reshape((B, T, H))
+    priorities = ((lambda_recon * reconstruction_losses) + (lambda_r + lambda_delta *
+                                                           value_losses.reshape(B,T,H).mean(axis=-1)) *
+                  returns.reshape(B, T, H).sum(axis=-1))
     return priorities
 
   K = BK // B
   value_losses = value_losses.reshape(B, K, H)
-  padding = jnp.ones((B, T - K, H))
+  padding = jnp.zeros((B, T - K, H))
   value_losses = jnp.concatenate([padding, value_losses], axis=1)
-  priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses.sum(axis=-1)
+  returns = jnp.concatenate([padding.copy(), returns.reshape(B, K, H)], axis=1)
+  priorities = ((lambda_recon * reconstruction_losses) +
+                (lambda_r + lambda_delta * value_losses.mean(axis=-1)) *
+                returns.sum(axis=-1))
 
   return priorities
 

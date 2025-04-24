@@ -495,7 +495,7 @@ def compute_priority(reconstruction_losses: jnp.array,
   value_losses = value_losses.reshape(B, K, H)
   padding = jnp.ones((B, T - K, H))
   value_losses = jnp.concatenate([padding, value_losses], axis=1)
-  priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses
+  priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses.sum(axis=-1)
 
   return priorities
 

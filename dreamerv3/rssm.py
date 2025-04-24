@@ -66,12 +66,12 @@ class RSSM(nj.Module):
       return carry, entry, feat
     else:
       unroll = jax.tree.leaves(tokens)[0].shape[1] if self.unroll else 1
-      carry, (entries, feat) = nj.scan(
+      carry, (entries, feat) = nj.scan( # we pass the whole trajectory --> each step in the sequence gets passed through _observe once and we use the previous hidden deter and stoch to get the new carry
           lambda carry, inputs: self._observe(
               carry, *inputs, training),
           carry, (tokens, action, reset), unroll=unroll, axis=1)
       return carry, entries, feat
-
+  #The _observe function defines one observation step of the Recurrent State Space Model (RSSM). It takes in the current latent state (carry), the observation embedding (tokens), and the action
   def _observe(self, carry, tokens, action, reset, training):
     deter, stoch, action = nn.mask(
         (carry['deter'], carry['stoch'], action), ~reset)
@@ -86,7 +86,7 @@ class RSSM(nj.Module):
     logit = self._logit('obslogit', x)
     stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
     carry = dict(deter=deter, stoch=stoch)
-    feat = dict(deter=deter, stoch=stoch, logit=logit)
+    feat = dict(deter=deter, stoch=stoch, logit=logit) # full information for los computation
     entry = dict(deter=deter, stoch=stoch)
     assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
     return carry, (entry, feat)
@@ -96,7 +96,7 @@ class RSSM(nj.Module):
       action = policy(sg(carry)) if callable(policy) else policy
       actemb = nn.DictConcat(self.act_space, 1)(action)
       deter = self._core(carry['deter'], carry['stoch'], actemb)
-      logit = self._prior(deter)
+      logit = self._prior(deter) # compute prior based on the deterministic s
       stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
       carry = nn.cast(dict(deter=deter, stoch=stoch))
       feat = nn.cast(dict(deter=deter, stoch=stoch, logit=logit))
@@ -104,7 +104,7 @@ class RSSM(nj.Module):
       return carry, (feat, action)
     else:
       unroll = length if self.unroll else 1
-      if callable(policy):
+      if callable(policy): # Checking whether policy is a function or a tensor. if it is a tensor then we passed the predefined actions
         carry, (feat, action) = nj.scan(
             lambda c, _: self.imagine(c, policy, 1, training, single=True),
             nn.cast(carry), (), length, unroll=unroll, axis=1)
@@ -117,30 +117,43 @@ class RSSM(nj.Module):
       # return carry, entries, feat, action
       return carry, feat, action
 
-  def loss(self, carry, tokens, acts, reset, training):
+  def _imagine(self, carry, policy):
+    action = policy(sg(carry)) if callable(policy) else policy
+    actemb = nn.DictConcat(self.act_space, 1)(action)
+    deter = self._core(carry['deter'], carry['stoch'], actemb)
+    logit = self._prior(deter)
+    stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
+    carry = nn.cast(dict(deter=deter, stoch=stoch))
+    feat = nn.cast(dict(deter=deter, stoch=stoch, logit=logit))
+    assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
+    return carry, (feat, action)
+  def loss(self, carry, tokens, acts, reset, training):#
+    """
+    Just the Kl divergence loss
+    """
     metrics = {}
     carry, entries, feat = self.observe(carry, tokens, acts, reset, training)
-    prior = self._prior(feat['deter'])
-    post = feat['logit']
-    dyn = self._dist(sg(post)).kl(self._dist(prior))
-    rep = self._dist(post).kl(self._dist(sg(prior)))
-    if self.free_nats:
+    prior = self._prior(feat['deter']) # we compute the prior based on the past deterministic hidden state just like in paper s_t = p(s_t | h_t)
+    post = feat['logit'] # we can just extract that as the posterior is based on the observed images
+    dyn = self._dist(sg(post)).kl(self._dist(prior)) # KL divergence posterior prior
+    rep = self._dist(post).kl(self._dist(sg(prior))) # KL divergence posterior prior
+    if self.free_nats: # clipping
       dyn = jnp.maximum(dyn, self.free_nats)
       rep = jnp.maximum(rep, self.free_nats)
     losses = {'dyn': dyn, 'rep': rep}
     metrics['dyn_ent'] = self._dist(prior).entropy().mean()
     metrics['rep_ent'] = self._dist(post).entropy().mean()
     return carry, entries, losses, feat, metrics
-
+  # This _core function defines the deterministic dynamics update inside the RSSM. It combines the current deterministic state (deter), stochastic latent variables (stoch), and actions (action) to compute the next deterministic state. Conceptually, it's the GRU-like transition function in the RSSM.
   def _core(self, deter, stoch, action):
     stoch = stoch.reshape((stoch.shape[0], -1))
     action /= sg(jnp.maximum(1, jnp.abs(action)))
     g = self.blocks
-    flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g)
-    group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g)
-    x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter)
-    x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0))
-    x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch)
+    flat2group = lambda x: einops.rearrange(x, '... (g h) -> ... g h', g=g) # performance trick
+    group2flat = lambda x: einops.rearrange(x, '... g h -> ... (g h)', g=g) # performance trick
+    x0 = self.sub('dynin0', nn.Linear, self.hidden, **self.kw)(deter) # proj(h) --> deter
+    x0 = nn.act(self.act)(self.sub('dynin0norm', nn.Norm, self.norm)(x0)) # proj(z) --> stoch
+    x1 = self.sub('dynin1', nn.Linear, self.hidden, **self.kw)(stoch) # proj(a) --> act
     x1 = nn.act(self.act)(self.sub('dynin1norm', nn.Norm, self.norm)(x1))
     x2 = self.sub('dynin2', nn.Linear, self.hidden, **self.kw)(action)
     x2 = nn.act(self.act)(self.sub('dynin2norm', nn.Norm, self.norm)(x2))
@@ -155,7 +168,7 @@ class RSSM(nj.Module):
     reset = jax.nn.sigmoid(reset)
     cand = jnp.tanh(reset * cand)
     update = jax.nn.sigmoid(update - 1)
-    deter = update * cand + (1 - update) * deter
+    deter = update * cand + (1 - update) * deter # Standard GRU update
     return deter
 
   def _prior(self, feat):

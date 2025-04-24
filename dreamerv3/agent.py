@@ -60,7 +60,7 @@ class Agent(embodied.jax.Agent):
     d1, d2 = config.policy_dist_disc, config.policy_dist_cont
     outs = {k: d1 if v.discrete else d2 for k, v in act_space.items()}
     self.pol = embodied.jax.MLPHead(
-        act_space, outs, **config.policy, name='pol')
+        act_space, outs, **config.policy, name='pol') # We can create with outs a DictHead output for multiple actions
 
     self.val = embodied.jax.MLPHead(scalar, **config.value, name='val')
     self.slowval = embodied.jax.SlowModel(
@@ -186,12 +186,12 @@ class Agent(embodied.jax.Agent):
       losses[key] = recon.loss(sg(target))
       B, T = reset.shape
 
-    # Imagination #TODO Understand
+    # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
     K = min(50 or T, T)# min(self.config.imag_last or T, T)
     H = self.config.imag_length # Imagination horizon
-    starts = self.dyn.starts(dyn_entries, dyn_carry, K)
+    starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
-    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)
+    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
     first = jax.tree.map(
         lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
     imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
@@ -397,17 +397,17 @@ def imag_loss(
   metrics = {}
 
   voffset, vscale = valnorm.stats()
-  val = value.pred() * vscale + voffset
+  val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
   slowval = slowvalue.pred() * vscale + voffset
   tarval = slowval if slowtar else val
   disc = 1 if contdisc else 1 - 1 / horizon
   weight = jnp.cumprod(disc * con, 1) / disc
   last = jnp.zeros_like(con)
   term = 1 - con
-  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam)
+  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam) # target lambda return
 
   roffset, rscale = retnorm(ret, update)
-  adv = (ret - tarval[:, :-1]) / rscale
+  adv = (ret - tarval[:, :-1]) / rscale # advantage as difference between return and value (normalized) ignoring the last step (because we have no return for the last step)
   aoffset, ascale = advnorm(adv, update)
   adv_normed = (adv - aoffset) / ascale
   logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
@@ -416,12 +416,12 @@ def imag_loss(
       logpi * sg(adv_normed) + actent * sum(ents.values()))
   losses['policy'] = policy_loss
 
-  voffset, vscale = valnorm(ret, update)
+  voffset, vscale = valnorm(ret, update) # this is important now. Here we can extract the value loss
   tar_normed = (ret - voffset) / vscale
   tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
   losses['value'] = sg(weight[:, :-1]) * (
       value.loss(sg(tar_padded)) +
-      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]
+      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1] # we extract the value loss here and store it
 
   ret_normed = (ret - roffset) / rscale
   metrics['adv'] = adv.mean()
@@ -481,9 +481,24 @@ def repl_loss(
 
   return losses, outs, metrics
 
-def compute_priority(reconstruction_losses: jnp.array, value_losses: jnp.array) -> jnp.array:
-  #TODO - how tf do we incorporate value losses of imagined trajectories
-  return reconstruction_losses
+def compute_priority(reconstruction_losses: jnp.array,
+                     value_losses: jnp.array,
+                     lambda_prio: float = 0.5) -> jnp.array:
+  B, T = reconstruction_losses.shape
+  BK, H = value_losses.shape
+
+  if B*T == BK:
+    priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses.reshape((B, T, H))
+    return priorities
+
+  K = BK // B
+  value_losses = value_losses.reshape(B, K, H)
+  padding = jnp.ones((B, T - K, H))
+  value_losses = jnp.concatenate([padding, value_losses], axis=1)
+  priorities = (1 - lambda_prio) * reconstruction_losses + lambda_prio * value_losses
+
+  return priorities
+
 
 def lambda_return(last, term, rew, val, boot, disc, lam):
   chex.assert_equal_shape((last, term, rew, val, boot))

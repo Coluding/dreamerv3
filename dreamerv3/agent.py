@@ -9,7 +9,6 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
-from embodied.jax.outs import Agg
 
 from . import rssm
 
@@ -169,7 +168,7 @@ class Agent(embodied.jax.Agent):
     enc_carry, enc_entries, tokens = self.enc(
         enc_carry, obs, reset, training)
     dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-        dyn_carry, tokens, prevact, reset, training)
+        dyn_carry, tokens, prevact, reset, training) # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
     losses.update(los)
     metrics.update(mets)
     dec_carry, dec_entries, recons = self.dec(
@@ -188,7 +187,7 @@ class Agent(embodied.jax.Agent):
       B, T = reset.shape
 
     # Imagination #TODO Understand
-    K = min(self.config.imag_last or T, T)
+    K = min(50 or T, T)# min(self.config.imag_last or T, T)
     H = self.config.imag_length # Imagination horizon
     starts = self.dyn.starts(dyn_entries, dyn_carry, K)
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))

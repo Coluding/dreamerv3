@@ -161,8 +161,8 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
 
     if self.config.use_intrinsic:
-      for i in range(self.config.intrinsic.ensemble_size):
-        carry, obs, prevact, stepid = combined_datarrr[i]
+      for i in range(1, self.config.intrinsic.ensemble_size):
+        carry, obs, prevact, stepid = combined_datarrr[i] if len(combined_datarrr) > 1 else combined_datarrr[0]
         self.update_ensemble(carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
 
     metrics.update(mets)

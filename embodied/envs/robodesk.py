@@ -4,7 +4,7 @@ import embodied
 import elements
 import collections
 
-import robodesk
+import robodesk_env
 
 
 class RoboDesk(embodied.Env):
@@ -16,7 +16,7 @@ class RoboDesk(embodied.Env):
         assert aggregate in ('max', 'mean'), aggregate
         assert pooling >= 1, pooling
 
-        self._env = robodesk.RoboDesk(
+        self._env = robodesk_env.RoboDesk(
             task=task,
             reward=reward,
             action_repeat=repeat,

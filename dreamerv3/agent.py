@@ -144,15 +144,16 @@ class Agent(embodied.jax.Agent):
     self.slowval.update()
     outs = {}
     if self.config.replay_context:
-      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"], metrics["ret_prio"])
+      # Combine both image reconstruction error and value prediction error
+      priorities = compute_priority(
+          reconstruction_error=metrics["image_prio"],
+          value_error=metrics["val_prio"])
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2], priority=priorities))
       B, T = obs['is_first'].shape
       assert all(x.shape[:2] == (B, T) for x in updates.values()), (
           (B, T), {k: v.shape for k, v in updates.items()})
       outs['replay'] = updates
-    # if self.config.replay.fracs.priority > 0:
-    #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
@@ -238,6 +239,7 @@ class Agent(embodied.jax.Agent):
     assert set(losses.keys()) == set(self.scales.keys()), (
         sorted(losses.keys()), sorted(self.scales.keys()))
     metrics['image_prio'] = sg(losses['image']).copy()
+    metrics['val_prio'] = sg(losses['value']).copy()  # Add this line
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 
@@ -482,6 +484,10 @@ def repl_loss(
 
   return losses, outs, metrics
 
+def compute_priority(reconstruction_error: jnp.array, value_error: jnp.array) -> jnp.array:
+    # Combine both errors with equal weights (0.5 each)
+    # You might want to adjust these weights based on your needs
+    return 0.5 * reconstruction_error + 0.5 * value_error
 def compute_priority(reconstruction_losses: jnp.array,
                      value_losses: jnp.array,
                      returns: jnp.array,

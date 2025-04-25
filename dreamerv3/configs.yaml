@@ -118,6 +118,10 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
+    use_intrinsic: False
+    intrinsic:
+      ensemble_size: 2
+      model_size: 1 #TODO need to adjust the decoder size if model_size != 1
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}

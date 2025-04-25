@@ -9,10 +9,12 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
+from typing import Tuple, Union, List, Dict
 
 from . import rssm
 
 f32 = jnp.float32
+f16 = jnp.bfloat16
 i32 = jnp.int32
 sg = lambda xs, skip=False: xs if skip else jax.lax.stop_gradient(xs)
 sample = lambda xs: jax.tree.map(lambda x: x.sample(nj.seed()), xs)
@@ -49,7 +51,7 @@ class Agent(embodied.jax.Agent):
     }[config.dec.typ](dec_space, **config.dec[config.dec.typ], name='dec')
 
     self.feat2tensor = lambda x: jnp.concatenate([
-        nn.cast(x['deter']),
+        nn.cast(x['deter'],),
         nn.cast(x['stoch'].reshape((*x['stoch'].shape[:-2], -1)))], -1)
 
     scalar = elements.Space(np.float32, ())
@@ -71,20 +73,38 @@ class Agent(embodied.jax.Agent):
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
 
-    self.modules = [
-        self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
-    self.opt = embodied.jax.Optimizer(
-        self.modules, self._make_opt(**config.opt), summary_depth=1,
-        name='opt')
-
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
     self.scales = scales
 
-    self.priority_collector = {}
+    self.modules = [
+      self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
+    self.opt = embodied.jax.Optimizer(
+      self.modules, self._make_opt(**config.opt), summary_depth=1,
+      name='opt')
 
-    self.ensemble = [rssm.RSSM(name="dyn" + str(i), **config.dyn[config.dyn.typ]) for i in range(5)]
+    if config.use_intrinsic:
+      # Try to get size-specific intrinsic config, fall back to default if not found
+      model_size = config.intrinsic["model_size"]
+      intrinsic_rssm_config = self._make_ensemble_rssm_config(config, model_size)
+
+      # Create ensemble with smaller RSSM models
+      self.ensemble = [
+        rssm.RSSM(
+          act_space,
+          **intrinsic_rssm_config,
+          name=f'rssm_ensemble_{i}'
+        ) for i in range(config.intrinsic.ensemble_size)
+      ]
+      self.ensemble_opt = [
+        embodied.jax.Optimizer(
+          [self.ensemble[i], self.enc, self.dec, self.rew, self.con],
+          self._make_opt(**config.opt),
+          summary_depth=1,
+          name=f'opt_ensemble_{i}'
+        ) for i in range(config.intrinsic.ensemble_size)
+      ]
 
   @property
   def policy_keys(self):
@@ -138,10 +158,16 @@ class Agent(embodied.jax.Agent):
           enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
     return carry, act, out
 
-  def train(self, carry, data): # need to go in here
+  def train(self, carry: Union[List[Dict[str, jnp.ndarray]], Dict[str, jnp.ndarray]], data): # need to go in here
     carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
     metrics, (carry, entries, outs, mets) = self.opt(
         self.loss, carry, obs, prevact, training=True, has_aux=True)
+
+    if self.config.use_intrinsic:
+      for i in range(self.config.intrinsic.ensemble_size):
+        self.ensemble_opt[i](
+          self.world_model_loss_ensemble, carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
+
     metrics.update(mets)
     self.slowval.update()
     outs = {}
@@ -158,23 +184,41 @@ class Agent(embodied.jax.Agent):
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
-
-  def loss(self, carry, obs, prevact, training):
+  def world_model_loss_ensemble(self, carry, obs, prevact, training: bool, ensemble_idx: int):
     enc_carry, dyn_carry, dec_carry = carry
     reset = obs['is_first']
     B, T = reset.shape
+    shapes = {}
+    shapes["B"] = B
+    shapes["T"] = T
     losses = {}
     metrics = {}
 
-    # World model
+    wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat) = (
+      self._world_model_loss(carry, reset, losses, metrics, obs, prevact, training, ensemble_idx)
+    )
+
+    carry = (enc_carry, dyn_carry, dec_carry)
+    entries = (enc_entries, dyn_entries, dec_entries)
+    outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
+    return wm_loss, (carry, entries, outs, metrics)
+
+  def _world_model_loss(self, carry: Tuple[Dict[str, jnp.ndarray]],reset: jnp.ndarray,
+                       losses: Dict[str, jnp.ndarray],
+                       metrics: Dict[str, jnp.ndarray], obs: Dict[str, jnp.ndarray], prevact: Dict[str, jnp.ndarray],
+                       training: bool, ensemble_idx: int = -1):
+    enc_carry, dyn_carry, dec_carry = carry
+
     enc_carry, enc_entries, tokens = self.enc(
-        enc_carry, obs, reset, training)
-    dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
-        dyn_carry, tokens, prevact, reset, training) # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
+      enc_carry, obs, reset, training)
+    dyn_model = self.ensemble[ensemble_idx] if ensemble_idx >= 0 else self.dyn
+    dyn_carry, dyn_entries, los, repfeat, mets = dyn_model.loss(
+      dyn_carry, tokens, prevact, reset,
+      training)  # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
     losses.update(los)
     metrics.update(mets)
     dec_carry, dec_entries, recons = self.dec(
-        dec_carry, repfeat, reset, training)
+      dec_carry, repfeat, reset, training)
     inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
     losses['rew'] = self.rew(inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
@@ -186,16 +230,24 @@ class Agent(embodied.jax.Agent):
       assert value.dtype == space.dtype, (key, space, value.dtype)
       target = f32(value) / 255 if isimage(space) else value
       losses[key] = recon.loss(sg(target))
-      B, T = reset.shape
 
-    # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
+    wm_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+    return wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat)
+
+  def _imagination_loss(self, dyn_entries: Dict[str, jnp.ndarray],
+                       dyn_carry: Dict[str, jnp.ndarray], repfeat: Dict[str, jnp.ndarray],
+                       training: bool,
+                       shapes: Dict[str, int]):
+    B, T = shapes["B"], shapes["T"]
     K = min(self.config.imag_last or T, T)
-    H = self.config.imag_length # Imagination horizon
-    starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
+    shapes["K"] = K
+    H = self.config.imag_length  # Imagination horizon
+    starts = self.dyn.starts(dyn_entries, dyn_carry,
+                             K)  # we only use the last K steps of our observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
-    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
+    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)  # imgfeat are the
     first = jax.tree.map(
-        lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
+      lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
     imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
     lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
     lastact = jax.tree.map(lambda x: x[:, None], lastact)
@@ -204,36 +256,63 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
     los, imgloss_out, mets = imag_loss(
-        imgact,
-        self.rew(inp, 2).pred(),
-        self.con(inp, 2).prob(1),
-        self.pol(inp, 2),
-        self.val(inp, 2),
-        self.slowval(inp, 2),
-        self.retnorm, self.valnorm, self.advnorm,
-        update=training,
-        contdisc=self.config.contdisc,
-        horizon=self.config.horizon,
-        **self.config.imag_loss)
+      imgact,
+      self.rew(inp, 2).pred(),  # rewards are of shape B*K,H
+      self.con(inp, 2).prob(1),
+      self.pol(inp, 2),
+      self.val(inp, 2),
+      self.slowval(inp, 2),
+      self.retnorm, self.valnorm, self.advnorm,
+      update=training,
+      contdisc=self.config.contdisc,
+      horizon=self.config.horizon,
+      **self.config.imag_loss)
+
+    return los, imgloss_out, mets
+
+  def repl_loss(self, repfeat: Dict[str, jnp.array], obs: Dict[str, jnp.array], imgloss_out: Dict[str, jnp.array],
+                training: bool, shapes: Dict[str, int]):
+    B, K = shapes["B"], shapes["K"]
+    feat = sg(repfeat, skip=self.config.repval_grad)
+    last, term, rew = [obs[k] for k in ('is_last', 'is_terminal', 'reward')]
+    boot = imgloss_out['ret'][:, 0].reshape(B, K)
+    feat, last, term, rew, boot = jax.tree.map(
+      lambda x: x[:, -K:], (feat, last, term, rew, boot))
+    inp = self.feat2tensor(feat)
+    los, reploss_out, mets = repl_loss(
+      last, term, rew, boot,
+      self.val(inp, 2),
+      self.slowval(inp, 2),
+      self.valnorm,
+      update=training,
+      horizon=self.config.horizon,
+      **self.config.repl_loss)
+    return los, reploss_out, mets
+
+  def loss(self, carry, obs, prevact, training):
+    enc_carry, dyn_carry, dec_carry = carry
+    reset = obs['is_first']
+    B, T = reset.shape
+    shapes = {}
+    shapes["B"] = B
+    shapes["T"] = T
+    losses = {}
+    metrics = {}
+
+    # World model loss
+    _, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat) = (
+      self._world_model_loss(carry, reset, losses, metrics, obs, prevact, training)
+    )
+
+    # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
+    los, imgloss_out, mets = self._imagination_loss(dyn_entries, dyn_carry, repfeat, training, shapes)
+    K = shapes["K"]
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
 
     # Replay
     if self.config.repval_loss:
-      feat = sg(repfeat, skip=self.config.repval_grad)
-      last, term, rew = [obs[k] for k in ('is_last', 'is_terminal', 'reward')]
-      boot = imgloss_out['ret'][:, 0].reshape(B, K)
-      feat, last, term, rew, boot = jax.tree.map(
-          lambda x: x[:, -K:], (feat, last, term, rew, boot))
-      inp = self.feat2tensor(feat)
-      los, reploss_out, mets = repl_loss(
-          last, term, rew, boot,
-          self.val(inp, 2),
-          self.slowval(inp, 2),
-          self.valnorm,
-          update=training,
-          horizon=self.config.horizon,
-          **self.config.repl_loss)
+      los, reploss_out, mets = self.repl_loss(repfeat, obs, imgloss_out, training, shapes)
       losses.update(los)
       metrics.update(prefix(mets, 'reploss'))
 
@@ -382,6 +461,62 @@ class Agent(embodied.jax.Agent):
     chain.append(optax.scale_by_learning_rate(sched))
     return optax.chain(*chain)
 
+  def _make_ensemble_rssm_config(self, config: elements.Config, model_size: float):
+    ens_rssm_config = config.dyn.rssm.copy()
+    relevant_keys = ["deter", "hidden", "stoch"]
+
+    for key in relevant_keys:
+      ens_rssm_config[key] = int(ens_rssm_config[key] * model_size)
+
+    return ens_rssm_config
+
+  def initialize_ensemble(self):
+    """Initializes the ensemble with scaled-down components."""
+    model_size = self.config.intrinsic["model_size"]
+    ensemble_size = self.config.intrinsic["ensemble_size"]
+
+    # Create scaled-down RSSM config
+    intrinsic_rssm_config = self._make_ensemble_rssm_config(self.config, model_size)
+
+    # Initialize ensemble RSSMs
+    self.ensemble = [
+      rssm.RSSM(
+        self.act_space,
+        **intrinsic_rssm_config,
+        name=f'rssm_ensemble_{i}'
+      ) for i in range(ensemble_size)
+    ]
+
+    scaled_reward_head = embodied.jax.MLPHead(
+        elements.Space(np.float32, ()),
+        **self._scale_config(self.config.rewhead, model_size),
+        name=f'rew_ensemble'
+      )
+
+    scaled_decoder = rssm.Decoder(
+        self.obs_space,
+        **self._scale_config(self.config.dec.simple, model_size),
+        name=f'dec_ensemble'
+      )
+
+    self.ensemble_opt = [
+      embodied.jax.Optimizer(
+        [self.ensemble[i], scaled_decoder, scaled_reward_head],
+        self._make_opt(**self.config.opt),
+        summary_depth=1,
+        name=f'opt_ensemble_{i}'
+      ) for i in range(ensemble_size)
+    ]
+
+  def _scale_config(self, config, scale_factor):
+    """Scales the configuration values by the given scale factor."""
+    scaled_config = config.copy()
+    for key in ['units', 'layers', 'depth']:
+      if key in scaled_config:
+        scaled_config[key] = int(scaled_config[key] * scale_factor)
+    return scaled_config
+
+
 
 def imag_loss(
     act, rew, con,
@@ -405,7 +540,7 @@ def imag_loss(
   disc = 1 if contdisc else 1 - 1 / horizon
   weight = jnp.cumprod(disc * con, 1) / disc
   last = jnp.zeros_like(con)
-  term = 1 - con
+  term = 1 - con # rew += intrinsic_reward
   ret = lambda_return(last, term, rew, tarval, tarval, disc, lam) # target lambda return
 
   roffset, rscale = retnorm(ret, update)

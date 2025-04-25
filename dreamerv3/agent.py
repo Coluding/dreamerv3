@@ -484,10 +484,6 @@ def repl_loss(
 
   return losses, outs, metrics
 
-def compute_priority(reconstruction_error: jnp.array, value_error: jnp.array) -> jnp.array:
-    # Combine both errors with equal weights (0.5 each)
-    # You might want to adjust these weights based on your needs
-    return 0.5 * reconstruction_error + 0.5 * value_error
 def compute_priority(reconstruction_losses: jnp.array,
                      value_losses: jnp.array,
                      returns: jnp.array,

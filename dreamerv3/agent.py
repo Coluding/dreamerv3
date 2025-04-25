@@ -9,9 +9,10 @@ import jax.numpy as jnp
 import ninjax as nj
 import numpy as np
 import optax
-from typing import Tuple, Union, List, Dict
+from typing import Tuple, Union, List, Dict, Literal
 
 from . import rssm
+from .ensemble import EnsembleController
 
 f32 = jnp.float32
 f16 = jnp.bfloat16
@@ -84,27 +85,19 @@ class Agent(embodied.jax.Agent):
       self.modules, self._make_opt(**config.opt), summary_depth=1,
       name='opt')
 
-    if config.use_intrinsic:
-      # Try to get size-specific intrinsic config, fall back to default if not found
-      model_size = config.intrinsic["model_size"]
-      intrinsic_rssm_config = self._make_ensemble_rssm_config(config, model_size)
+    self.ensemble = None
 
-      # Create ensemble with smaller RSSM models
-      self.ensemble = [
-        rssm.RSSM(
-          act_space,
-          **intrinsic_rssm_config,
-          name=f'rssm_ensemble_{i}'
-        ) for i in range(config.intrinsic.ensemble_size)
-      ]
-      self.ensemble_opt = [
-        embodied.jax.Optimizer(
-          [self.ensemble[i], self.enc, self.dec, self.rew, self.con],
-          self._make_opt(**config.opt),
-          summary_depth=1,
-          name=f'opt_ensemble_{i}'
-        ) for i in range(config.intrinsic.ensemble_size)
-      ]
+    if config.use_intrinsic:
+      print("-----You are using intrinsic rewards!-----" + "-"*20)
+      self.initialize_ensemble(act_space, enc_space, dec_space)
+      
+      self.ens_controller = EnsembleController(
+        ensembles=self.ensemble,
+        horizon=self.config.intrinsic["imag_horizon"],
+        rew_heads=self.scaled_reward_head,
+        exploration_type=self.config.intrinsic["exploration_type"],
+        reward_scale=self.config.intrinsic["reward_scale"],
+      )
 
   @property
   def policy_keys(self):
@@ -159,20 +152,28 @@ class Agent(embodied.jax.Agent):
     return carry, act, out
 
   def train(self, carry: Union[List[Dict[str, jnp.ndarray]], Dict[str, jnp.ndarray]], data): # need to go in here
-    carry, obs, prevact, stepid = self._apply_replay_context(carry, data)
+    if not isinstance(carry, list):
+      carry = [carry]
+
+    combined_datarrr = [self._apply_replay_context(carry[whyeasynames], data) for whyeasynames in range(len(carry))]
+    carry, obs, prevact, stepid = combined_datarrr[0]
     metrics, (carry, entries, outs, mets) = self.opt(
         self.loss, carry, obs, prevact, training=True, has_aux=True)
 
     if self.config.use_intrinsic:
       for i in range(self.config.intrinsic.ensemble_size):
-        self.ensemble_opt[i](
-          self.world_model_loss_ensemble, carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
+        carry, obs, prevact, stepid = combined_datarrr[i]
+        self.update_ensemble(carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
 
     metrics.update(mets)
+    image_prio = metrics.pop('image_prio')
+    val_prio = metrics.pop('val_prio')
+    ret_prio = metrics.pop('ret_prio')
     self.slowval.update()
+
     outs = {}
     if self.config.replay_context:
-      priorities = compute_priority(metrics["image_prio"], metrics["val_prio"], metrics["ret_prio"])
+      priorities = compute_priority(image_prio, val_prio, ret_prio)
       updates = elements.tree.flatdict(dict(
           stepid=stepid, enc=entries[0], dyn=entries[1], dec=entries[2], priority=priorities))
       B, T = obs['is_first'].shape
@@ -184,7 +185,10 @@ class Agent(embodied.jax.Agent):
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
-  def world_model_loss_ensemble(self, carry, obs, prevact, training: bool, ensemble_idx: int):
+  def world_model_loss_ensemble(self, carry: Tuple[Dict[str, jnp.ndarray]],
+                                obs: Dict[str, jnp.ndarray],
+                                prevact: Dict[str, jnp.ndarray],
+                                training: bool, ensemble_idx: int):
     enc_carry, dyn_carry, dec_carry = carry
     reset = obs['is_first']
     B, T = reset.shape
@@ -194,8 +198,11 @@ class Agent(embodied.jax.Agent):
     losses = {}
     metrics = {}
 
+    obs = jax.tree.map(lambda x: x.astype(f32) if x.dtype == f16 else x, obs)
+    prevact = jax.tree.map(lambda x: x.astype(f32) if x.dtype == f16 else x, prevact)
+
     wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat) = (
-      self._world_model_loss(carry, reset, losses, metrics, obs, prevact, training, ensemble_idx)
+        self._world_model_loss(carry, reset, losses, metrics, obs, prevact, training, ensemble_idx)
     )
 
     carry = (enc_carry, dyn_carry, dec_carry)
@@ -203,22 +210,62 @@ class Agent(embodied.jax.Agent):
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
     return wm_loss, (carry, entries, outs, metrics)
 
-  def _world_model_loss(self, carry: Tuple[Dict[str, jnp.ndarray]],reset: jnp.ndarray,
+  def _world_model_loss(self, carry: Tuple[Dict[str, jnp.ndarray]], reset: jnp.ndarray,
                        losses: Dict[str, jnp.ndarray],
-                       metrics: Dict[str, jnp.ndarray], obs: Dict[str, jnp.ndarray], prevact: Dict[str, jnp.ndarray],
+                       metrics: Dict[str, jnp.ndarray], obs: Dict[str, jnp.ndarray],
+                       prevact: Dict[str, jnp.ndarray],
                        training: bool, ensemble_idx: int = -1):
     enc_carry, dyn_carry, dec_carry = carry
 
-    enc_carry, enc_entries, tokens = self.enc(
-      enc_carry, obs, reset, training)
+    # Ensure consistent types for state representations
+    enc_carry = jax.tree.map(lambda x: x.astype(f32) if x.dtype == f16 else x, enc_carry)
+    dyn_carry = jax.tree.map(lambda x: x.astype(f32) if x.dtype == f16 else x, dyn_carry)
+
+    enc_carry, enc_entries, tokens = self.scaled_encoder(
+        enc_carry, obs, reset, training)
     dyn_model = self.ensemble[ensemble_idx] if ensemble_idx >= 0 else self.dyn
     dyn_carry, dyn_entries, los, repfeat, mets = dyn_model.loss(
-      dyn_carry, tokens, prevact, reset,
-      training)  # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
+        dyn_carry, tokens, prevact, reset, training)
+
+    # Ensure consistent types for outputs
+    repfeat = jax.tree.map(lambda x: x.astype(f32) if x.dtype == f16 else x, repfeat)
+
     losses.update(los)
     metrics.update(mets)
+    dec_carry, dec_entries, recons = self.scaled_decoder(
+        dec_carry, repfeat, reset, training)
+    inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
+    losses['rew'] = self.scaled_reward_head(inp, 2).loss(obs['reward'])
+    con = f32(~obs['is_terminal'])
+    if self.config.contdisc:
+        con *= 1 - 1 / self.config.horizon
+    losses['con'] = self.scaled_con(self.feat2tensor(repfeat), 2).loss(con)
+    for key, recon in recons.items():
+        space, value = self.obs_space[key], obs[key]
+        assert value.dtype == space.dtype, (key, space, value.dtype)
+        target = f32(value) / 255 if isimage(space) else value
+        losses[key] = recon.loss(sg(target))
+
+    wm_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+    return wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat)
+
+  def loss(self, carry, obs, prevact, training):
+    enc_carry, dyn_carry, dec_carry = carry
+    reset = obs['is_first']
+    B, T = reset.shape
+    losses = {}
+    metrics = {}
+
+    # World model
+    enc_carry, enc_entries, tokens = self.enc(
+        enc_carry, obs, reset, training)
+    dyn_carry, dyn_entries, los, repfeat, mets = self.dyn.loss(
+        dyn_carry, tokens, prevact, reset, training) # dyn_carry is the last one, dyn_entries is the latent state of all items in the sequence
+    losses.update(los)
+    metrics.update(mets)
+    
     dec_carry, dec_entries, recons = self.dec(
-      dec_carry, repfeat, reset, training)
+        dec_carry, repfeat, reset, training)
     inp = sg(self.feat2tensor(repfeat), skip=self.config.reward_grad)
     losses['rew'] = self.rew(inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
@@ -230,24 +277,21 @@ class Agent(embodied.jax.Agent):
       assert value.dtype == space.dtype, (key, space, value.dtype)
       target = f32(value) / 255 if isimage(space) else value
       losses[key] = recon.loss(sg(target))
+      B, T = reset.shape
 
-    wm_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
-    return wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat)
-
-  def _imagination_loss(self, dyn_entries: Dict[str, jnp.ndarray],
-                       dyn_carry: Dict[str, jnp.ndarray], repfeat: Dict[str, jnp.ndarray],
-                       training: bool,
-                       shapes: Dict[str, int]):
-    B, T = shapes["B"], shapes["T"]
+    # Imagination
     K = min(self.config.imag_last or T, T)
-    shapes["K"] = K
-    H = self.config.imag_length  # Imagination horizon
-    starts = self.dyn.starts(dyn_entries, dyn_carry,
-                             K)  # we only use the last K steps of our observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
+    H = self.config.imag_length # Imagination horizon
+    starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
+
+    if self.config.use_intrinsic:
+      intrinsic_reward = self.compute_intrinsic_reward(starts)
+      metrics['intrinsic_reward'] = intrinsic_reward
+
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
-    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training)  # imgfeat are the
+    _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
     first = jax.tree.map(
-      lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
+        lambda x: x[:, -K:].reshape((B * K, 1, *x.shape[2:])), repfeat)
     imgfeat = concat([sg(first, skip=self.config.ac_grads), sg(imgfeat)], 1)
     lastact = policyfn(jax.tree.map(lambda x: x[:, -1], imgfeat))
     lastact = jax.tree.map(lambda x: x[:, None], lastact)
@@ -256,63 +300,36 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
     los, imgloss_out, mets = imag_loss(
-      imgact,
-      self.rew(inp, 2).pred(),  # rewards are of shape B*K,H
-      self.con(inp, 2).prob(1),
-      self.pol(inp, 2),
-      self.val(inp, 2),
-      self.slowval(inp, 2),
-      self.retnorm, self.valnorm, self.advnorm,
-      update=training,
-      contdisc=self.config.contdisc,
-      horizon=self.config.horizon,
-      **self.config.imag_loss)
-
-    return los, imgloss_out, mets
-
-  def repl_loss(self, repfeat: Dict[str, jnp.array], obs: Dict[str, jnp.array], imgloss_out: Dict[str, jnp.array],
-                training: bool, shapes: Dict[str, int]):
-    B, K = shapes["B"], shapes["K"]
-    feat = sg(repfeat, skip=self.config.repval_grad)
-    last, term, rew = [obs[k] for k in ('is_last', 'is_terminal', 'reward')]
-    boot = imgloss_out['ret'][:, 0].reshape(B, K)
-    feat, last, term, rew, boot = jax.tree.map(
-      lambda x: x[:, -K:], (feat, last, term, rew, boot))
-    inp = self.feat2tensor(feat)
-    los, reploss_out, mets = repl_loss(
-      last, term, rew, boot,
-      self.val(inp, 2),
-      self.slowval(inp, 2),
-      self.valnorm,
-      update=training,
-      horizon=self.config.horizon,
-      **self.config.repl_loss)
-    return los, reploss_out, mets
-
-  def loss(self, carry, obs, prevact, training):
-    enc_carry, dyn_carry, dec_carry = carry
-    reset = obs['is_first']
-    B, T = reset.shape
-    shapes = {}
-    shapes["B"] = B
-    shapes["T"] = T
-    losses = {}
-    metrics = {}
-
-    # World model loss
-    _, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat) = (
-      self._world_model_loss(carry, reset, losses, metrics, obs, prevact, training)
-    )
-
-    # Imagination #TODO Understand --> How the fuck should we incoporate the ensemble here??????
-    los, imgloss_out, mets = self._imagination_loss(dyn_entries, dyn_carry, repfeat, training, shapes)
-    K = shapes["K"]
+        imgact,
+        self.rew(inp, 2).pred(),
+        self.con(inp, 2).prob(1),
+        self.pol(inp, 2),
+        self.val(inp, 2),
+        self.slowval(inp, 2),
+        self.retnorm, self.valnorm, self.advnorm,
+        update=training,
+        contdisc=self.config.contdisc,
+        horizon=self.config.horizon,
+        **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
 
     # Replay
     if self.config.repval_loss:
-      los, reploss_out, mets = self.repl_loss(repfeat, obs, imgloss_out, training, shapes)
+      feat = sg(repfeat, skip=self.config.repval_grad)
+      last, term, rew = [obs[k] for k in ('is_last', 'is_terminal', 'reward')]
+      boot = imgloss_out['ret'][:, 0].reshape(B, K)
+      feat, last, term, rew, boot = jax.tree.map(
+          lambda x: x[:, -K:], (feat, last, term, rew, boot))
+      inp = self.feat2tensor(feat)
+      los, reploss_out, mets = repl_loss(
+          last, term, rew, boot,
+          self.val(inp, 2),
+          self.slowval(inp, 2),
+          self.valnorm,
+          update=training,
+          horizon=self.config.horizon,
+          **self.config.repl_loss)
       losses.update(los)
       metrics.update(prefix(mets, 'reploss'))
 
@@ -470,43 +487,76 @@ class Agent(embodied.jax.Agent):
 
     return ens_rssm_config
 
-  def initialize_ensemble(self):
+  def initialize_ensemble(self, act_space: dict, enc_space: dict, dec_space: dict):
     """Initializes the ensemble with scaled-down components."""
     model_size = self.config.intrinsic["model_size"]
     ensemble_size = self.config.intrinsic["ensemble_size"]
 
     # Create scaled-down RSSM config
     intrinsic_rssm_config = self._make_ensemble_rssm_config(self.config, model_size)
+    scalar = elements.Space(np.float32, ())
+    binary = elements.Space(bool, (), 0, 2)
+    #TODO: I think the model size cannot vary, otherwise the policy would not work anymore and we would also need a scaled_down policy
+    match self.config.intrinsic["learn_strategy"]:
+      case "joint":
+        # Initialize ensemble RSSMs
+        self.ensemble = [
+          rssm.RSSM(
+            act_space,
+            **intrinsic_rssm_config,
+            name=f'rssm_ensemble_{i}'
+          ) for i in range(ensemble_size)
+        ]
 
-    # Initialize ensemble RSSMs
-    self.ensemble = [
-      rssm.RSSM(
-        self.act_space,
-        **intrinsic_rssm_config,
-        name=f'rssm_ensemble_{i}'
-      ) for i in range(ensemble_size)
-    ]
+        self.scaled_encoder = rssm.Encoder(
+            enc_space,
+            **self._scale_config(self.config.enc.simple, model_size),
+            name=f'enc_ensemble'
+          )
 
-    scaled_reward_head = embodied.jax.MLPHead(
-        elements.Space(np.float32, ()),
-        **self._scale_config(self.config.rewhead, model_size),
-        name=f'rew_ensemble'
-      )
+        self.scaled_reward_head = embodied.jax.MLPHead(
+          scalar,
+          **self._scale_config(self.config.rewhead, model_size),
+            name=f'rew_ensemble'
+          )
 
-    scaled_decoder = rssm.Decoder(
-        self.obs_space,
-        **self._scale_config(self.config.dec.simple, model_size),
-        name=f'dec_ensemble'
-      )
+        self.scaled_decoder = rssm.Decoder(
+            dec_space,
+            **self._scale_config(self.config.dec.simple, model_size),
+            name=f'dec_ensemble'
+          )
 
-    self.ensemble_opt = [
-      embodied.jax.Optimizer(
-        [self.ensemble[i], scaled_decoder, scaled_reward_head],
-        self._make_opt(**self.config.opt),
-        summary_depth=1,
-        name=f'opt_ensemble_{i}'
-      ) for i in range(ensemble_size)
-    ]
+        self.scaled_con = embodied.jax.MLPHead(
+            binary,
+            **self._scale_config(self.config.conhead, model_size),
+            name=f'con_ensemble'
+          )
+
+        self.ensemble_opt = [
+          embodied.jax.Optimizer(
+            [self.ensemble[i], self.scaled_encoder, self.scaled_decoder, self.scaled_reward_head, self.scaled_con],
+            self._make_opt(**self.config.opt),
+            summary_depth=1,
+            name=f'opt_ensemble_{i}'
+          ) for i in range(ensemble_size)
+        ]
+
+      case "ema":
+        # TODO initialize differently --> maybe different rate?
+        assert self.config.intrinsic["model_size"] == 1, "EMA only works with model_size = 1"
+        self.ensemble = [
+          embodied.jax.SlowModel(
+            model = rssm.RSSM(
+            self.act_space,
+            **intrinsic_rssm_config,
+            name=f'rssm_ensemble_{i}'
+          ),
+            source=self.dyn,
+            rate=self.config.intrinsic["ema_decay"] ** (i*2), #current best solution imo
+            every=self.config.intrinsic["update_every"],
+          ) for i in range(self.config.intrinsic.ensemble_size)
+        ]
+        
 
   def _scale_config(self, config, scale_factor):
     """Scales the configuration values by the given scale factor."""
@@ -516,6 +566,42 @@ class Agent(embodied.jax.Agent):
         scaled_config[key] = int(scaled_config[key] * scale_factor)
     return scaled_config
 
+  def update_ensemble(self, ensemble_idx: int, **kwargs):
+    """
+      Updates the ensemble model at the given index with the current model.
+      If the ensemble model is an RSSM, it is trained. Otherwise, it is updated using EMA.
+    """
+    if isinstance(self.ensemble[ensemble_idx], rssm.RSSM):
+      self.ensemble_opt[ensemble_idx](
+        self.world_model_loss_ensemble,
+        ensemble_idx=ensemble_idx,
+        **kwargs
+        )
+    else:
+      self.ensemble[ensemble_idx].update()
+
+  def compute_intrinsic_reward(self, starts: List[Dict[str, jnp.ndarray]]):
+    """Compute intrinsic reward using the ensemble controller."""
+    if not self.config.use_intrinsic:
+        return 0.0
+
+    # I think we would want to use the same starts for imagination as in the imagination part of the loss
+    # Why? In the end, we would want to determine the LDA for state s by aggregating the intrinsic reward when starting at that state
+    # TODO: Wait a minute: If we do that, we can also frame this maybe as a goal conditioned problem like in PEG?
+    # We value the state in a trajectory with the intrinsic return when starting imagination in that state
+    # This is effectively giving states higher rewards whose future trajectory gives us a high intrinsic reward
+    # This is very simimlar to PEG (is this maybe the same lol???) where we train our policy to reach goal states from which the epxected intrinsic reward is high
+
+    policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+    
+    # Use the ensemble controller to compute intrinsic rewards
+    intrinsic_reward = self.ens_controller.compute_intrinsic_reward(
+        carries=starts,
+        policy_fn=policyfn,
+        training=False
+    )
+    
+    return intrinsic_reward
 
 
 def imag_loss(

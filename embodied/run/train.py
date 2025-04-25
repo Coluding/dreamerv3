@@ -73,7 +73,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
     for _ in range(should_train(step)):
       with elements.timer.section('stream_next'):
         batch = next(stream_train)
-      carry_train[0], outs, mets = agent.train(carry_train[0], batch)
+      carry_train[0], outs, mets = agent.train(carry_train[0], batch) # how are we dealing with this --> Carry fo the ensemble ?
       train_fps.step(batch_steps)
       if 'replay' in outs:
         replay.update(outs['replay'])

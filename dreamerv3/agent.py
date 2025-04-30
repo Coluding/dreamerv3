@@ -84,8 +84,6 @@ class Agent(embodied.jax.Agent):
 
     self.priority_collector = {}
 
-    self.ensemble = [rssm.RSSM(name="dyn" + str(i), **config.dyn[config.dyn.typ]) for i in range(5)]
-
   @property
   def policy_keys(self):
     return '^(enc|dyn|dec|pol)/'

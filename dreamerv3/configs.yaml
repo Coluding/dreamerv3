@@ -73,7 +73,7 @@ defaults:
 
   jax:
     platform: cuda
-    compute_dtype: bfloat16
+    compute_dtype: float32 #bfloat16
     policy_devices: [0]
     train_devices: [0]
     mock_devices: 0

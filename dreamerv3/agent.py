@@ -89,6 +89,9 @@ class Agent(embodied.jax.Agent):
 
     if config.use_intrinsic:
       print("-"*40 + "-----You are using intrinsic rewards!-----" + "-"*40)
+      print("The strategy is: " + config.intrinsic["learn_strategy"])
+      print("The exploration type is: " + config.intrinsic["exploration_type"])
+      print("-" * 100)
       self.initialize_ensemble(act_space, enc_space, dec_space)
       
       self.ens_controller = EnsembleController(
@@ -352,6 +355,8 @@ class Agent(embodied.jax.Agent):
     carry = (enc_carry, dyn_carry, dec_carry)
     entries = (enc_entries, dyn_entries, dec_entries)
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
+    metrics.pop("intrinsic_reward") if "intrinsic_reward" in metrics else None
+
     return loss, (carry, entries, outs, metrics)
 
   def report(self, carry, data):

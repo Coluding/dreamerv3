@@ -168,8 +168,8 @@ class Agent(embodied.jax.Agent):
         self.update_ensemble(carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
 
     metrics.update(mets)
-    image_prio = metrics.pop('image_prio')
-    val_prio = metrics.pop('val_prio')
+    image_prio = metrics.pop('image_loss_prio')
+    val_prio = metrics.pop('val_loss_prio')
     ret_prio = metrics.pop('ret_prio')
     self.slowval.update()
 
@@ -345,8 +345,7 @@ class Agent(embodied.jax.Agent):
 
     assert set(losses.keys()) == set(self.scales.keys()), (
         sorted(losses.keys()), sorted(self.scales.keys()))
-    metrics['image_prio'] = sg(losses['image']).copy()
-    metrics['val_prio'] = sg(losses['value']).copy()  # Add this line
+    metrics['image_loss_prio'] = sg(losses['image']).copy()
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 
@@ -587,6 +586,9 @@ class Agent(embodied.jax.Agent):
       Updates the ensemble model at the given index with the current model.
       If the ensemble model is an RSSM, it is trained. Otherwise, it is updated using EMA.
     """
+    if self.ensemble is None:
+      return
+
     if isinstance(self.ensemble[ensemble_idx], rssm.RSSM):
       self.ensemble_opt[ensemble_idx](
         self.loss,
@@ -595,7 +597,6 @@ class Agent(embodied.jax.Agent):
         )
     elif isinstance(self.ensemble[ensemble_idx], embodied.jax.SlowModel):
       self.ensemble[ensemble_idx].update()
-    # else no update needed because we have perturbed starts
 
   def compute_intrinsic_reward(self, starts: List[Dict[str, jnp.ndarray]]):
     """Compute intrinsic reward using the ensemble controller."""
@@ -678,7 +679,7 @@ def imag_loss(
   metrics['con'] = con.mean()
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()
-  metrics['val_prio'] = sg(losses['value']).copy()
+  metrics['val_loss_prio'] = sg(losses['value']).copy()
   metrics["ret_prio"] = ret_normed.copy()
   metrics['tar'] = tar_normed.mean()
   metrics['weight'] = weight.mean()

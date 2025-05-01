@@ -7,7 +7,7 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 16
+  batch_size: 8
   batch_length: 64
   report_length: 32
   consec_train: 1
@@ -122,7 +122,7 @@ defaults:
     intrinsic:
       ensemble_size: 2
       model_size: 1 #TODO need to adjust the decoder size if model_size != 1
-      learn_strategy: "ema" #ema, joint #perturbed_starts
+      learn_strategy: "perturbed_starts" #ema, joint #perturbed_starts
       ema_decay: 0.25 # rate for SlowModel
       update_every: 1
       exploration_type: "reward_variance" #state_disagreement # reward_variance

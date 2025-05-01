@@ -262,9 +262,9 @@ class Agent(embodied.Agent):
   @elements.timer.section('jaxagent_train')
   def train(self, carry, data):
     seed = data.pop('seed')
-    assert sorted(data.keys()) == sorted(self.spaces.keys()), (
+    assert sorted(data.keys()) == sorted(self.spaces.keys()), ( #TODO problem: data has dtype F32?? But it works with F32 on the first run
         sorted(data.keys()), sorted(self.spaces.keys()))
-    allo = {k: v for k, v in self.params.items() if k in self.policy_keys}
+    allo = {k: v for k, v in self.params.items() if k in self.policy_keys} #TODO parameters as well F32??
     dona = {k: v for k, v in self.params.items() if k not in self.policy_keys}
     with self.train_lock:
       with elements.timer.section('jit_train'):

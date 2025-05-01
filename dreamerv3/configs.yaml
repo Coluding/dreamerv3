@@ -118,6 +118,19 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
+    use_intrinsic: True
+    intrinsic:
+      ensemble_size: 2
+      model_size: 1 #TODO need to adjust the decoder size if model_size != 1
+      learn_strategy: "ema" #ema, joint #perturbed_starts
+      ema_decay: 0.25 # rate for SlowModel
+      update_every: 1
+      exploration_type: "reward_variance" #state_disagreement # reward_variance
+      reward_scale: 1.0
+      add_mean: True
+      imag_horizon: 15
+      reward_type: disagreement # prediction_error, disagreement, max_disagreement
+      intrinsic_reward_lambda: 1.0
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}

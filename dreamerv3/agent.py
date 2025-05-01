@@ -90,7 +90,7 @@ class Agent(embodied.jax.Agent):
     if config.use_intrinsic:
       print("-"*40 + "-----You are using intrinsic rewards!-----" + "-"*40)
       self.initialize_ensemble(act_space, enc_space, dec_space)
-
+      
       self.ens_controller = EnsembleController(
         ensembles=self.ensemble if self.config.intrinsic["learn_strategy"] != "perturbed_starts" else [self.dyn],
         horizon=self.config.intrinsic["imag_horizon"],
@@ -182,8 +182,6 @@ class Agent(embodied.jax.Agent):
       assert all(x.shape[:2] == (B, T) for x in updates.values()), (
           (B, T), {k: v.shape for k, v in updates.items()})
       outs['replay'] = updates
-    # if self.config.replay.fracs.priority > 0:
-    #   outs['replay']['priority'] = losses['model']
     carry = (*carry, {k: data[k][:, -1] for k in self.act_space})
     return carry, outs, metrics
 
@@ -348,6 +346,7 @@ class Agent(embodied.jax.Agent):
     assert set(losses.keys()) == set(self.scales.keys()), (
         sorted(losses.keys()), sorted(self.scales.keys()))
     metrics['image_prio'] = sg(losses['image']).copy()
+    metrics['val_prio'] = sg(losses['value']).copy()  # Add this line
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
 

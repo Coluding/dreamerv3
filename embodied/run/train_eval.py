@@ -5,6 +5,8 @@ import elements
 import embodied
 import numpy as np
 
+from experiments.base import Experiment
+
 
 def train_eval(
     make_agent,
@@ -14,7 +16,9 @@ def train_eval(
     make_env_eval,
     make_stream,
     make_logger,
-    args):
+    args,
+    experiment: Experiment = None,
+  ):
 
   agent = make_agent()
   replay_train = make_replay_train()
@@ -41,7 +45,20 @@ def train_eval(
   should_save = elements.when.Clock(args.save_every)
 
   @elements.timer.section('logfn')
-  def logfn(tran, worker, mode):
+  def logfn(tran: dict, worker: int, mode: str) -> None:
+    """Process a transition from the environment and log statistics.
+    
+    This function aggregates episode statistics, logs images from the first worker,
+    and processes custom logging metrics. When an episode ends, it computes summary
+    statistics and adds them to the logger. Handles both training and evaluation modes.
+    
+    Args:
+        tran: A dictionary containing the transition data with keys like 'reward',
+              'is_first', 'is_last', and potentially image observations and custom logs.
+        worker: The worker ID that generated this transition, used to track
+                statistics per environment instance.
+        mode: Either 'train' or 'eval', determines which episode aggregator to use.
+    """
     episodes = dict(train=train_episodes, eval=eval_episodes)[mode]
     epstats = dict(train=train_epstats, eval=eval_epstats)[mode]
     episode = episodes[worker]

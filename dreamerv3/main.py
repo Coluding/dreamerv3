@@ -68,7 +68,6 @@ def main(argv: dict = None, experiment: Experiment = None):
       consec_train=config.consec_train,
       consec_report=config.consec_report,
       replay_context=config.replay_context,
-      experiment=experiment,
   )
 
   if config.script == 'train':
@@ -78,7 +77,9 @@ def main(argv: dict = None, experiment: Experiment = None):
         bind(make_env, config),
         bind(make_stream, config),
         bind(make_logger, config),
-        args)
+        args,
+        experiment=experiment,
+    )
 
   elif config.script == 'train_eval':
     embodied.run.train_eval(
@@ -89,7 +90,9 @@ def main(argv: dict = None, experiment: Experiment = None):
         bind(make_env, config),
         bind(make_stream, config),
         bind(make_logger, config),
-        args)
+        args,
+        experiment=experiment,
+    )
 
   elif config.script == 'eval_only':
     embodied.run.eval_only(

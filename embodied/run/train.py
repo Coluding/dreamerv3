@@ -5,8 +5,10 @@ import elements
 import embodied
 import numpy as np
 
+from experiments.base import Experiment
 
-def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
+
+def train(make_agent, make_replay, make_env, make_stream, make_logger, args, experiment: Experiment = None):
 
   agent = make_agent()
   replay = make_replay()
@@ -27,11 +29,25 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   should_report = embodied.LocalClock(args.report_every)
   should_save = embodied.LocalClock(args.save_every)
 
-  if experiment := args.get("experiment", False):
+  if experiment:
     print(f"Got experiment! \n{experiment}")
 
   @elements.timer.section('logfn')
-  def logfn(tran, worker):
+  def logfn(tran: dict, worker: int) -> None:
+    """
+    Process a transition from the environment and log statistics.
+    
+    This function aggregates episode statistics, logs images from the first worker,
+    and processes custom logging metrics. When an episode ends, it computes summary
+    statistics and adds them to the logger.
+    
+    Args:
+        tran: A dictionary containing the transition data with keys like 'reward',
+              'is_first', 'is_last', and potentially image observations and custom logs.
+        worker: The worker ID that generated this transition, used to track
+                statistics per environment instance.
+    """
+    
     episode = episodes[worker]
     tran['is_first'] and episode.reset()
     episode.add('score', tran['reward'], agg='sum')
@@ -105,6 +121,12 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
         carry_report, mets = agent.report(carry_report, next(stream_report))
         agg.add(mets)
       logger.add(agg.result(), prefix='report')
+
+    print(f"The results of the current step: \n")
+    print(f"Train results: {train_agg.result()}")
+    print(f"Epstats: {epstats.result()}")
+    print(f"Replay state: {replay.stats()}")
+    print(f"Usage: {usage.stats()}")
 
     if should_log(step):
       logger.add(train_agg.result())

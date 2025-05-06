@@ -27,6 +27,9 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args):
   should_report = embodied.LocalClock(args.report_every)
   should_save = embodied.LocalClock(args.save_every)
 
+  if experiment := args.get("experiment", False):
+    print(f"Got experiment! \n{experiment}")
+
   @elements.timer.section('logfn')
   def logfn(tran, worker):
     episode = episodes[worker]

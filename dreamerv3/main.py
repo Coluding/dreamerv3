@@ -15,8 +15,10 @@ import numpy as np
 import portal
 import ruamel.yaml as yaml
 
+from experiments.base import Experiment
 
-def main(argv=None):
+
+def main(argv: dict = None, experiment: Experiment = None):
   from .agent import Agent
   [elements.print(line) for line in Agent.banner]
 
@@ -41,6 +43,9 @@ def main(argv=None):
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
 
+  if experiment:
+    experiment.config = config
+
   def init():
     elements.timer.global_timer.enabled = config.logger.timer
 
@@ -63,6 +68,7 @@ def main(argv=None):
       consec_train=config.consec_train,
       consec_report=config.consec_report,
       replay_context=config.replay_context,
+      experiment=experiment,
   )
 
   if config.script == 'train':

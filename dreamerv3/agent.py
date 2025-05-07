@@ -166,9 +166,17 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
 
     if self.config.use_intrinsic:
-      for i in range(self.config.intrinsic.ensemble_size):
-        carry, obs, prevact, stepid = combined_datarrr[i + 1] if len(combined_datarrr) > 1 else combined_datarrr[0]
-        self.update_ensemble(carry=carry, obs=obs, prevact=prevact, ensemble_idx=i, training=True, has_aux=True)
+      if self.config.intrinsic.learn_strategy == "joint":
+        metrics_ens, _ = self.ensemble_opt(
+        self.joint_world_model_loss,
+        carry=carry, obs=obs, prevact=prevact,
+        training=True, has_aux=True
+    )
+        metrics.update(metrics_ens)
+
+      elif self.config.intrinsic.learn_strategy == "ema":
+        for model in self.ensemble:
+          model.update()     
 
     metrics.update(mets)
     image_prio = metrics.pop('image_loss_prio')
@@ -214,6 +222,24 @@ class Agent(embodied.jax.Agent):
     entries = (enc_entries, dyn_entries, dec_entries)
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
     return wm_loss, (carry, entries, outs, metrics)
+
+  def joint_world_model_loss(self, carry, obs, prevact, training, **kw):
+    """Loss aggegation"""
+    tot_loss = 0.0
+    all_metrics = {}
+    for i in range(self.config.intrinsic.ensemble_size):
+        loss_i, (_, _, _, mets_i) = self.world_model_loss_ensemble(
+            ensemble_idx=i,
+            carry=carry,
+            obs=obs,
+            prevact=prevact,
+            training=training,
+            **kw,
+        )
+        tot_loss += loss_i
+        all_metrics.update(prefix(mets_i, f"ens{i}"))
+    tot_loss /= self.config.intrinsic.ensemble_size  
+    return tot_loss, (carry, {}, {}, all_metrics)
 
   def _world_model_loss(self, carry: Tuple[Dict[str, jnp.ndarray]], reset: jnp.ndarray,
                        losses: Dict[str, jnp.ndarray],
@@ -550,15 +576,22 @@ class Agent(embodied.jax.Agent):
             **self._scale_config(self.config.conhead, model_size),
             name=f'con_ensemble'
           )
-
-        self.ensemble_opt = [
-          embodied.jax.Optimizer(
-            [self.ensemble[i], self.scaled_encoder, self.scaled_decoder, self.scaled_reward_head, self.scaled_con],
+        
+        ## Added 
+        ensemble_modules = [
+        *self.ensemble, # unpack list of ensemble models 
+        self.scaled_encoder,
+        self.scaled_decoder,
+        self.scaled_reward_head,
+        self.scaled_con
+      ]
+        # create a single optimizer for all ensemble members
+        self.ensemble_opt = embodied.jax.Optimizer(
+            ensemble_modules,
             self._make_opt(**self.config.opt),
             summary_depth=1,
-            name=f'opt_ensemble_{i}'
-          ) for i in range(ensemble_size)
-        ]
+            name=f'opt_ensemble'
+          ) 
 
       case "ema":
         # TODO initialize differently --> maybe different rate?
@@ -585,23 +618,6 @@ class Agent(embodied.jax.Agent):
       if key in scaled_config:
         scaled_config[key] = int(scaled_config[key] * scale_factor)
     return scaled_config
-
-  def update_ensemble(self, ensemble_idx: int, **kwargs):
-    """
-      Updates the ensemble model at the given index with the current model.
-      If the ensemble model is an RSSM, it is trained. Otherwise, it is updated using EMA.
-    """
-    if self.ensemble is None:
-      return
-
-    if isinstance(self.ensemble[ensemble_idx], rssm.RSSM):
-      self.ensemble_opt[ensemble_idx](
-        self.loss,
-        idx=ensemble_idx,
-        **kwargs
-        )
-    elif isinstance(self.ensemble[ensemble_idx], embodied.jax.SlowModel):
-      self.ensemble[ensemble_idx].update()
 
   def compute_intrinsic_reward(self, starts: List[Dict[str, jnp.ndarray]]):
     """Compute intrinsic reward using the ensemble controller."""

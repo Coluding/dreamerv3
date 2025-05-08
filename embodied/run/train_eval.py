@@ -159,6 +159,9 @@ def train_eval(
 
     driver_train(train_policy, steps=10)
 
+    if experiment:
+      experiment.train_step_metrics.append(agg.result())
+
     if should_log(step):
       logger.add(agg.result())
       logger.add(train_epstats.result(), prefix='epstats')

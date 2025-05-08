@@ -122,11 +122,13 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args, exp
         agg.add(mets)
       logger.add(agg.result(), prefix='report')
 
-    print(f"The results of the current step: \n")
-    print(f"Train results: {train_agg.result()}")
-    print(f"Epstats: {epstats.result()}")
-    print(f"Replay state: {replay.stats()}")
-    print(f"Usage: {usage.stats()}")
+    # print(f"The results of the current step: \n")
+    # print(f"Train results: {train_agg.result()}")
+    # print(f"Epstats: {epstats.result()}")
+    # print(f"Replay state: {replay.stats()}")
+    # print(f"Usage: {usage.stats()}")
+    if experiment:
+      experiment.train_step_metrics.append(train_agg.result())
 
     if should_log(step):
       logger.add(train_agg.result())

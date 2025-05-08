@@ -17,7 +17,7 @@ optax~=0.2.4
 portal>=3.5.0
 scope>=0.4.4
 tqdm~=4.67.1
-
+monai>=1.4.0
 robodesk~=1.0.0
 matplotlib~=3.10.1
 cloudpickle~=3.1.1

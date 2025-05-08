@@ -42,7 +42,7 @@ defaults:
     size: 5e6
     online: True
     fracs: {uniform: 0.0, priority: 1.0, recency: 0.0}
-    prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
+    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: False}
     priosignal: model
     recexp: 1.0
     chunksize: 1024

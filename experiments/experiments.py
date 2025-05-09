@@ -23,5 +23,9 @@ def run_standard_dreamer(run_config: dict = DEFAULT_RUN_CFG) -> None:
     # Save results
     experiment.store(csv_file=f"artifacts/standard_dreamer/results.csv")
 
+
+
+
+
 if __name__ == "__main__":
     run_standard_dreamer()

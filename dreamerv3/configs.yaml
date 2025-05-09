@@ -12,7 +12,7 @@ defaults:
   report_length: 32
   consec_train: 1
   consec_report: 1
-  replay_context: 1
+  replay_context: 0
   random_agent: False
   clock_addr: ''
   clock_port: ''

@@ -123,7 +123,7 @@ def train(make_agent, make_replay, make_env, make_stream, make_logger, args, exp
       logger.add(agg.result(), prefix='report')
 
     # print(f"The results of the current step: \n")
-    # print(f"Train results: {train_agg.result()}")
+    print(f"Train results: {train_agg.result()}")
     # print(f"Epstats: {epstats.result()}")
     # print(f"Replay state: {replay.stats()}")
     # print(f"Usage: {usage.stats()}")

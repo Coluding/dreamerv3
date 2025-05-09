@@ -13,8 +13,8 @@ DEFAULT_RUN_CFG = {
     "logdir": r"~/logdir/{timestamp}", 
     "configs": "atari100k", 
     "run.train_ratio": 32,
-    "run.duration": 60,
-    "run.steps": 1000,
+    "run.duration": 120,
+    "run.steps": 2000,
 }
 
 
@@ -39,8 +39,13 @@ class Experiment:
     def flatten(self):
         concatenated_metrics = defaultdict(list) # Will contain a list of the metrics from each step.
         for metric_set in self.train_step_metrics:
-            for metric_key, value in metric_set:
+            for metric_key, value in metric_set.items():
                 concatenated_metrics[metric_key].append(value)
+
+        print(f"The length of the collected metric sets: {len(self.train_step_metrics)}")
+        print(f"The following is a metric set at step 112: \n{self.train_step_metrics[111]}")
+        is_all_empty = all(len(metric_set.keys()) == 0 for metric_set in self.train_step_metrics)
+        print(f"The metric sets are all empty: {is_all_empty}")
 
         # Combine all necessary experiment information into a flattened dictionary
         flattened_dict = {

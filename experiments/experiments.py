@@ -112,7 +112,7 @@ if __name__ == "__main__":
     
     # Parse all arguments
     args = parser.parse_args()
-    
+
     # Handle run_config specially - match against presets
     if hasattr(args, 'run_config') and args.run_config:
         # Get all uppercase configs from presets
@@ -134,7 +134,15 @@ if __name__ == "__main__":
         else:
             print(f"Warning: No matching config found for '{args.run_config}'")
             print(f"Available configs: {list(preset_configs.keys())}")
-    
+    else:
+        # If no config provided, use the default from the function signature
+        func_defaults = {
+            name: func.__defaults__[list(inspect.signature(func).parameters.keys()).index('run_config')] 
+            for name, func in experiment_functions.items()
+        }
+        args.run_config = func_defaults[args.experiment]
+        print(f"Using default config for {args.experiment}")
+
     # Call the selected experiment function with the parsed arguments
     kwargs = {k: v for k, v in vars(args).items() if k != 'experiment'}
     experiment_functions[args.experiment](**kwargs)

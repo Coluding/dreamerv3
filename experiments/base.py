@@ -16,7 +16,13 @@ class Experiment:
     # Class-level variable to keep track of the experiment count across runtimes
     _experiment_count = 0
 
-    def __init__(self, run_cfg: dict = DEFAULT_RUN_CFG, model_name: str = "DreamerV3"):
+    def __init__(
+            self, 
+            run_cfg: dict = DEFAULT_RUN_CFG, 
+            experiment_name: str = "Unnamed Experiment",
+            experiment_description: str = "Undescribed Experiment",
+            model_name: str = "DreamerV3",
+        ):
         """
         Class used to collect and store information on one run.
         """
@@ -25,10 +31,13 @@ class Experiment:
         self.ID = Experiment._experiment_count
         Experiment._experiment_count += 1
 
+        self.experiment_name = experiment_name
+        self.experiment_description = experiment_description
+        self.model_name = model_name
+
         self.run_cfg = run_cfg
         self.config = {} # Later added once the experiment is initialized.
         self.train_step_metrics = []
-        self.model_name = model_name
         self.start_time = datetime.now()
 
     def flatten(self):
@@ -58,9 +67,11 @@ class Experiment:
         self.end_time = datetime.now()
         flattened_dict = {
             "ID": self.ID,
+            "experiment_name": self.experiment_name,
+            "experiment_description": self.experiment_description,
+            "model_name": self.model_name,
             "run_config": str(self.run_cfg),
             "config": json.dumps(self.config),
-            "model_name": self.model_name,
             "PID": os.getpid(),
             "timestamp_start": self.start_time,
             "timestamp_end": self.end_time,

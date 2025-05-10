@@ -1,6 +1,7 @@
 import time
 
-from base import Experiment, DEFAULT_RUN_CFG
+from base import Experiment
+from presets import DEFAULT_RUN_CFG
 from dreamerv3.main import main
 
 

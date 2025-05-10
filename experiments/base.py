@@ -8,15 +8,7 @@ from datetime import datetime
 import csv
 from collections import defaultdict
 import numpy as np
-
-        
-DEFAULT_RUN_CFG = {
-    "logdir": r"~/logdir/{timestamp}", 
-    "configs": "atari100k", 
-    "run.train_ratio": 32,
-    "run.duration": 120,
-    "run.steps": 2000,
-}
+from presets import DEFAULT_RUN_CFG
 
 
 class Experiment:
@@ -36,6 +28,7 @@ class Experiment:
         self.config = {} # Later added once the experiment is initialized.
         self.train_step_metrics = []
         self.model_name = model_name
+        self.start_time = datetime.now()
 
     def flatten(self):
         concatenated_metrics = defaultdict(list) # Will contain a list of the metrics from each step.
@@ -58,13 +51,16 @@ class Experiment:
         # print(f"The metric sets are all empty: {is_all_empty}")
 
         # Combine all necessary experiment information into a flattened dictionary
+        self.end_time = datetime.now()
         flattened_dict = {
             "ID": self.ID,
             "run_config": str(self.run_cfg),
             "config": str(self.config),
             "model_name": self.model_name,
             "PID": os.getpid(),
-            "timestamp": datetime.now(),
+            "timestamp_start": self.start_time,
+            "timestamp_end": self.end_time,
+            "duration (s)": (self.end_time - self.start_time).total_seconds(),
             **concatenated_metrics,
         }
         return flattened_dict

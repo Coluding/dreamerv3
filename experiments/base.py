@@ -32,8 +32,11 @@ class Experiment:
 
     def flatten(self):
         concatenated_metrics = defaultdict(list) # Will contain a list of the metrics from each step.
+        discarded_metrics = {"train/image_prio", "train/ret_prio", "train/val_prio"} # These will be filtered out for the CSV file.
         for metric_set in self.train_step_metrics:
             for metric_key, value in metric_set.items():
+                if metric_key in discarded_metrics:
+                    continue
                 # print(f"Now processing: {metric_key}")
                 if (isinstance(value, np.ndarray) and len(value.shape) == 0) or isinstance(value, np.floating):
                     parsed_value = float(value)

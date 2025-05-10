@@ -6,6 +6,7 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 import csv
+import json
 from collections import defaultdict
 import numpy as np
 from presets import DEFAULT_RUN_CFG
@@ -58,7 +59,7 @@ class Experiment:
         flattened_dict = {
             "ID": self.ID,
             "run_config": str(self.run_cfg),
-            "config": str(self.config),
+            "config": json.dumps(self.config),
             "model_name": self.model_name,
             "PID": os.getpid(),
             "timestamp_start": self.start_time,

@@ -3,13 +3,12 @@ Base class used to collect and store experimental results for each run.
 """
 
 import os
-import matplotlib.pyplot as plt
 from datetime import datetime
 import csv
 import json
 from collections import defaultdict
 import numpy as np
-from presets import DEFAULT_RUN_CFG
+from presets import *
 
 
 class Experiment:
@@ -121,16 +120,3 @@ class Experiment:
             writer.writeheader()
             for row in rows:
                 writer.writerow({field: row.get(field, "") for field in all_fields})
-
-    def plot_loss(self):
-        # Plot the training and test loss over epochs using matplotlib
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.train_loss, label="Training Loss", marker="o")
-        plt.plot(self.test_loss, label="Test Loss", marker="x")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title(f"Loss Plot for Experiment {self.ID}")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-

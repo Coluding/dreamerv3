@@ -23,6 +23,7 @@ All results are stored in `dreamerv3/artifacts/results.csv`. It contains the con
 ## Creating Tables
 To create tables that are aggregated over several runs of the same experiment using different seeds, you can use the tables CLI. To create a table from the results CLI, run:
 ```
-TO BE ADDED!
+python experiments/tables.py
 ```
+To include/exclude metrics from the table, modify the default argument of the `process_experiment_results` function in `tables.py`. To include experiments, add/remove the names of the experiments from the `experiment_names` default argument set. The result is printed to the commandline.
 <br>

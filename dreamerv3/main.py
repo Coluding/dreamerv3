@@ -215,6 +215,9 @@ def make_replay(config, folder, mode='train'):
         recency=selectors.Recency(recency),
     ), config.replay.fracs)
 
+    if config.replay.fracs["priority"] == 1.0:
+      kwargs["selector"] = selectors.Prioritized(**config.replay.prio)
+
   return embodied.replay.Replay(**kwargs)
 
 

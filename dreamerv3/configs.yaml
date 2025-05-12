@@ -7,7 +7,7 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 16
+  batch_size: 8
   batch_length: 64
   report_length: 32
   consec_train: 1
@@ -42,7 +42,7 @@ defaults:
     size: 5e6
     online: True
     fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
-    prio: {exponent: 0.8, maxfrac: 0.5, initial: inf, zero_on_sample: True}
+    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
@@ -73,7 +73,7 @@ defaults:
 
   jax:
     platform: cuda
-    compute_dtype: bfloat16
+    compute_dtype: float32 #bfloat16
     policy_devices: [0]
     train_devices: [0]
     mock_devices: 0
@@ -118,6 +118,19 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
+    use_intrinsic: False
+    intrinsic:
+      ensemble_size: 2
+      model_size: 1 #TODO need to adjust the decoder size if model_size != 1
+      learn_strategy: "perturbed_starts" #ema, joint #perturbed_starts
+      ema_decay: 0.25 # rate for SlowModel
+      update_every: 1
+      exploration_type: "reward_variance" #state_disagreement # reward_variance
+      reward_scale: 1.0
+      add_mean: True
+      imag_horizon: 15
+      reward_type: disagreement # prediction_error, disagreement, max_disagreement
+      intrinsic_reward_lambda: 1.0
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}

@@ -145,12 +145,17 @@ class Prioritized:
       stepids = [x.tobytes() for x in stepids]
     for stepid, priority in zip(stepids, priorities):
       try:
-        self.prios[stepid] = priority
+        # Handle NaN priorities by using the initial value
+        if np.isnan(priority):
+          print(f'Warning: NaN priority detected, using initial value {self.initial}')
+          self.prios[stepid] = self.initial
+        else:
+          self.prios[stepid] = priority
       except KeyError:
         print('Ignoring priority update for removed time step.')
     items = []
     for stepid in stepids:
-      items += self.stepitems[stepid] # HERE ARE THE STEPS: defaultdict step_id: steps (65 steps)
+      items += self.stepitems[stepid]
     for key in list(set(items)):
       try:
         self.tree.update(key, self._aggregate(key))
@@ -188,6 +193,10 @@ class Prioritized:
     # Both list comprehensions in this function are a performance bottleneck
     # because they are called very often.
     prios = [self.prios[stepid] for stepid in self.items[key]]
+    # Filter out NaN values
+    prios = [p for p in prios if not np.isnan(p)]
+    if not prios:  # If all priorities were NaN
+      return self.initial
     if self.exponent != 1.0:
       prios = [x ** self.exponent for x in prios]
     mean = sum(prios) / len(prios)
@@ -295,8 +304,12 @@ class SampleTree:
       uprobs = np.array([x.uprob for x in node.children])
       total = uprobs.sum()
       if not np.isfinite(total):
-        finite = np.isinf(uprobs)
-        probs = finite / finite.sum()
+        finite = np.isfinite(uprobs)
+        if finite.any():
+          probs = finite.astype(np.float32) / finite.sum()
+        else:
+          # All values are non-finite, use uniform distribution
+          probs = np.ones(len(uprobs)) / len(uprobs)
       elif total == 0:
         probs = np.ones(len(uprobs)) / len(uprobs)
       else:

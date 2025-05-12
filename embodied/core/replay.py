@@ -22,7 +22,7 @@ class Replay:
     self.chunksize = chunksize
     self.name = name
 
-    self.sampler = selectors.Prioritized() #selector or selectors.Uniform(seed)
+    self.sampler = selector if selector is not None else selectors.Uniform(seed)
 
     self.chunks = {}
     self.refs = {}
@@ -50,7 +50,7 @@ class Replay:
       self.directory = None
     self.save_wait = save_wait
 
-    self.metrics = {'samples': 0, 'inserts': 0, 'updates': 0}
+    self.metrics = {'samples': 0, 'inserts': 0, 'updates': 0, 'inserted_priorities': 0, 'N': 0}
 
   def __len__(self):
     return len(self.items)
@@ -67,6 +67,7 @@ class Replay:
         'inserts': m['inserts'],
         'samples': m['samples'],
         'updates': m['updates'],
+        'inserted_priorities': m['inserted_priorities'],
         'replay_ratio': ratio(self.length * m['samples'], m['inserts']),
     }
     for key in self.metrics:
@@ -75,10 +76,12 @@ class Replay:
 
   @elements.timer.section('replay_add')
   def add(self, step: dict, worker=0):
+    # Filter out logging data.
     step = {k: v for k, v in step.items() if not k.startswith('log/')}
     with self.rwlock.reading:
       step = {k: np.asarray(v) for k, v in step.items()}
 
+      # If this is not in the current workers
       if worker not in self.current:
         chunk = chunklib.Chunk(self.chunksize)
         with self.refs_lock:
@@ -86,9 +89,11 @@ class Replay:
         self.chunks[chunk.uuid] = chunk
         self.current[worker] = (chunk.uuid, 0)
 
+      # A chunk contains the data (image, hidden states, reward) of chunk size steps (max 1024).
       chunkid, index = self.current[worker]
       step['stepid'] = np.frombuffer(
           bytes(chunkid) + index.to_bytes(4, 'big'), np.uint8) # create an unique id for the step in the chunk
+      # A stream is data coming from a certain worker, if we run with one worker we have one stream only
       stream = self.streams[worker]
       chunk = self.chunks[chunkid]
       assert chunk.length == index, (chunk.length, index)
@@ -134,6 +139,16 @@ class Replay:
     self.metrics['updates'] += int(np.prod(stepid.shape[:-1]))
     if priority is not None:
       assert priority.ndim == 2, priority.shape
+      self.metrics['N'] += 1
+      N = self.metrics['N']
+      # Calculate average priority for this batch
+      avg_priority = float(np.mean(priority))
+      # Update the running average of inserted priorities using moving average formula
+      if N == 0:
+        self.metrics['inserted_priorities'] = avg_priority
+      else:
+        # Combine with existing average (simple running average)
+        self.metrics['inserted_priorities'] = (1/N) * avg_priority + ((N - 1) / N) * self.metrics['inserted_priorities']
       self.sampler.prioritize(
           stepid.reshape((-1, stepid.shape[-1])),
           priority.flatten())

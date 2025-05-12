@@ -1,9 +1,11 @@
 from base import Experiment
 from presets import *
 from dreamerv3.main import main
+from typing import Iterable
 
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
+DEFAULT_DATASETS = {"atari100k"}
 
 
 def run_experiment(
@@ -11,33 +13,36 @@ def run_experiment(
         name: str = "Unnamed Experiment", 
         description: str = "Undescriped Experiment",
         num_seeds: int = 1,
-        results_csv_path: str = RESULTS_CSV_PATH
+        results_csv_path: str = RESULTS_CSV_PATH,
+        datasets: Iterable = DEFAULT_DATASETS,
     ) -> None:
     """
     Run an experiment.
     """
 
     for seed in range(num_seeds):
-        print(f"Starting run {seed+1}")
-        # First setup experiment instance
-        experiment = Experiment(
-            run_cfg=run_config,
-            experiment_name=name,
-            experiment_description=description,
-        )
+        for dataset in datasets:
+            print(f"Starting run {seed+1} for dataset {dataset}")
+            run_config["configs"] = dataset
+            # First setup experiment instance
+            experiment = Experiment(
+                run_cfg=run_config,
+                experiment_name=name,
+                experiment_description=description,
+            )
 
-        # Convert the flat dictionary to a list of command-line style arguments
-        argv = []
-        for key, value in run_config.items():
-            argv.extend([f'--{key}', str(value)])
-        argv.extend(['--seed', str(seed)])
+            # Convert the flat dictionary to a list of command-line style arguments
+            argv = []
+            for key, value in run_config.items():
+                argv.extend([f'--{key}', str(value)])
+            argv.extend(['--seed', str(seed)])
 
-        # Now call the main function
-        main(argv=argv, experiment=experiment)
+            # Now call the main function
+            main(argv=argv, experiment=experiment)
 
-        # Save results
-        experiment.store(csv_file=results_csv_path)
-        print(f"Finished run {seed+1}")
+            # Save results
+            experiment.store(csv_file=results_csv_path)
+            print(f"Finished run {seed+1}")
 
 
 def run_standard_dreamer(
@@ -45,12 +50,13 @@ def run_standard_dreamer(
         name: str = "Standard Dreamer", 
         description: str = "Standard Dreamer Experiment from the Readme but with Atari100k instead.",
         num_seeds: int = 1,
+        datasets: Iterable = DEFAULT_DATASETS,
     ) -> None:
     """
     Run the standard DreamerV3 on Atari.
     """
 
-    run_experiment(run_config, name, description, num_seeds)
+    run_experiment(run_config, name, description, num_seeds, datasets=datasets)
 
 
 def run_replay_buffer_experiment(
@@ -58,12 +64,13 @@ def run_replay_buffer_experiment(
         name: str = "Optimized Replay Buffer", 
         description: str = "Using a prioritized replay buffer.",
         num_seeds: int = 2,
+        datasets: Iterable = DEFAULT_DATASETS,
     ) -> None:
     """
     Running the Dreamer with optimized replay buffer.
     """
 
-    run_experiment(run_config, name, description, num_seeds)
+    run_experiment(run_config, name, description, num_seeds, datasets=datasets)
 
 
 def run_latent_disagreement_experiment(
@@ -71,12 +78,13 @@ def run_latent_disagreement_experiment(
         name: str = "Latent Disagreement", 
         description: str = "Using the latent disagreement method to guide exploration - the mean+variance variant.",
         num_seeds: int = 2,
+        datasets: Iterable = DEFAULT_DATASETS,
     ) -> None:
     """
     Running the Dreamer with latent disagreement.
     """
 
-    run_experiment(run_config, name, description, num_seeds)
+    run_experiment(run_config, name, description, num_seeds, datasets=datasets)
 
 
 

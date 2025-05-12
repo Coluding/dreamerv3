@@ -168,10 +168,10 @@ class Agent(embodied.jax.Agent):
     if self.config.use_intrinsic:
       if self.config.intrinsic.learn_strategy == "joint":
         metrics_ens, _ = self.ensemble_opt(
-        self.joint_world_model_loss,
-        carry=carry, obs=obs, prevact=prevact,
-        training=True, has_aux=True
-    )
+          self.joint_world_model_loss,
+          carry=carry, obs=obs, prevact=prevact,
+          training=True, has_aux=True
+        )
         metrics.update(metrics_ens)
 
       elif self.config.intrinsic.learn_strategy == "ema":

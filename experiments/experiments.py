@@ -42,7 +42,7 @@ def run_experiment(
 
             # Save results
             experiment.store(csv_file=results_csv_path)
-            print(f"Finished run {seed+1}")
+            print(f"Finished run {seed+1} for dataset {dataset}")
 
 
 def run_standard_dreamer(

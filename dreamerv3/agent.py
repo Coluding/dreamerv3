@@ -381,7 +381,7 @@ class Agent(embodied.jax.Agent):
     carry = (enc_carry, dyn_carry, dec_carry)
     entries = (enc_entries, dyn_entries, dec_entries)
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
-    metrics.pop("intrinsic_reward") if "intrinsic_reward" in metrics else None
+    # metrics.pop("intrinsic_reward") if "intrinsic_reward" in metrics else None
 
     return loss, (carry, entries, outs, metrics)
 

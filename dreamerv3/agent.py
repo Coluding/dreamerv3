@@ -322,7 +322,6 @@ class Agent(embodied.jax.Agent):
 
     if self.config.use_intrinsic:
       intrinsic_reward = self.compute_intrinsic_reward(starts)
-      metrics['intrinsic_reward'] = intrinsic_reward
 
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
@@ -663,6 +662,7 @@ def imag_loss(
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
     intrinsic_reward_expanded_1_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
+    extrinsic_rew = rew.copy()
     rew = rew + intrinsic_reward_expanded_1_entry * intrinsic_reward_lambda
 
   voffset, vscale = valnorm.stats()
@@ -697,6 +697,8 @@ def imag_loss(
   metrics['adv_std'] = adv.std()
   metrics['adv_mag'] = jnp.abs(adv).mean()
   metrics['rew'] = rew.mean()
+  metrics["intrinsic_reward"] = intrinsic_reward.mean() if intrinsic_reward is not None else 0
+  metrics["extrinsic_reward"] = extrinsic_rew.mean() if intrinsic_reward is not None else rew.mean()
   metrics['con'] = con.mean()
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()

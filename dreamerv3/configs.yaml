@@ -7,12 +7,12 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 8
+  batch_size: 16
   batch_length: 64
   report_length: 32
   consec_train: 1
   consec_report: 1
-  replay_context: 1
+  replay_context: 0
   random_agent: False
   clock_addr: ''
   clock_port: ''
@@ -41,8 +41,8 @@ defaults:
   replay:
     size: 5e6
     online: True
-    fracs: {uniform: 0.0, priority: 1.0, recency: 0.0}
-    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: False}
+    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
+    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
@@ -118,7 +118,7 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
-    use_intrinsic: True
+    use_intrinsic: False
     intrinsic:
       ensemble_size: 2
       model_size: 1 #TODO need to adjust the decoder size if model_size != 1

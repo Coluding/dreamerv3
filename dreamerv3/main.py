@@ -15,8 +15,10 @@ import numpy as np
 import portal
 import ruamel.yaml as yaml
 
+from experiments.base import Experiment
 
-def main(argv=None):
+
+def main(argv: dict = None, experiment: Experiment = None):
   from .agent import Agent
   [elements.print(line) for line in Agent.banner]
 
@@ -40,6 +42,9 @@ def main(argv=None):
   if not config.script.endswith(('_env', '_replay')):
     logdir.mkdir()
     config.save(logdir / 'config.yaml')
+
+  if experiment:
+    experiment.config = config
 
   def init():
     elements.timer.global_timer.enabled = config.logger.timer
@@ -72,7 +77,9 @@ def main(argv=None):
         bind(make_env, config),
         bind(make_stream, config),
         bind(make_logger, config),
-        args)
+        args,
+        experiment=experiment,
+    )
 
   elif config.script == 'train_eval':
     embodied.run.train_eval(
@@ -83,7 +90,9 @@ def main(argv=None):
         bind(make_env, config),
         bind(make_stream, config),
         bind(make_logger, config),
-        args)
+        args,
+        experiment=experiment,
+    )
 
   elif config.script == 'eval_only':
     embodied.run.eval_only(

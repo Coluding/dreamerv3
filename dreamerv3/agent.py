@@ -168,10 +168,10 @@ class Agent(embodied.jax.Agent):
     if self.config.use_intrinsic:
       if self.config.intrinsic.learn_strategy == "joint":
         metrics_ens, _ = self.ensemble_opt(
-        self.joint_world_model_loss,
-        carry=carry, obs=obs, prevact=prevact,
-        training=True, has_aux=True
-    )
+          self.joint_world_model_loss,
+          carry=carry, obs=obs, prevact=prevact,
+          training=True, has_aux=True
+        )
         metrics.update(metrics_ens)
 
       elif self.config.intrinsic.learn_strategy == "ema":
@@ -380,7 +380,7 @@ class Agent(embodied.jax.Agent):
     carry = (enc_carry, dyn_carry, dec_carry)
     entries = (enc_entries, dyn_entries, dec_entries)
     outs = {'tokens': tokens, 'repfeat': repfeat, 'losses': losses}
-    metrics.pop("intrinsic_reward") if "intrinsic_reward" in metrics else None
+    # metrics.pop("intrinsic_reward") if "intrinsic_reward" in metrics else None
 
     return loss, (carry, entries, outs, metrics)
 

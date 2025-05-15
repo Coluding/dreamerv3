@@ -690,7 +690,7 @@ def imag_loss(
   tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
   losses['value'] = sg(weight[:, :-1]) * (
       value.loss(sg(tar_padded)) +
-      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1] # we extract the value loss here and store it
+      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]  # we extract the value loss here and store it
 
   ret_normed = (ret - roffset) / rscale
   metrics['adv'] = adv.mean()

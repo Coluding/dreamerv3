@@ -6,6 +6,7 @@ from typing import Iterable
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
 DEFAULT_DATASETS = {"atari100k"}
+ATARI_TASKS = {"atari100k_boxing", "atari100k_krull"}
 
 
 def run_experiment(
@@ -15,6 +16,7 @@ def run_experiment(
         num_seeds: int = 1,
         results_csv_path: str = RESULTS_CSV_PATH,
         datasets: Iterable = DEFAULT_DATASETS,
+        tasks: Iterable = ATARI_TASKS,
     ) -> None:
     """
     Run an experiment.
@@ -22,27 +24,52 @@ def run_experiment(
 
     for seed in range(num_seeds):
         for dataset in datasets:
-            print(f"Starting run {seed+1} for dataset {dataset}")
-            run_config["configs"] = dataset
-            # First setup experiment instance
-            experiment = Experiment(
-                run_cfg=run_config,
-                experiment_name=name,
-                experiment_description=description,
-            )
+            if tasks is not None:
+                for task in tasks:
+                    make_run(
+                        run_config,
+                        name,
+                        description,
+                        seed,
+                        results_csv_path,
+                        dataset,
+                        task
+                    )
 
-            # Convert the flat dictionary to a list of command-line style arguments
-            argv = []
-            for key, value in run_config.items():
-                argv.extend([f'--{key}', str(value)])
-            argv.extend(['--seed', str(seed)])
+def make_run(
+        run_config: dict = DEFAULT_RUN_CFG, 
+        name: str = "Unnamed Experiment", 
+        description: str = "Undescriped Experiment",
+        seed: int = 1,
+        results_csv_path: str = RESULTS_CSV_PATH,
+        dataset: str = None,
+        task: str = None
+    ) -> None:
 
-            # Now call the main function
-            main(argv=argv, experiment=experiment)
+    print(f"Starting run {seed+1} for dataset {dataset}")
+    run_config["configs"] = dataset
+    if task:
+        run_config["task"] = task
+    
+    # First setup experiment instance
+    experiment = Experiment(
+        run_cfg=run_config,
+        experiment_name=name,
+        experiment_description=description,
+    )
 
-            # Save results
-            experiment.store(csv_file=results_csv_path)
-            print(f"Finished run {seed+1} for dataset {dataset}")
+    # Convert the flat dictionary to a list of command-line style arguments
+    argv = []
+    for key, value in run_config.items():
+        argv.extend([f'--{key}', str(value)])
+    argv.extend(['--seed', str(seed)])
+
+    # Now call the main function
+    main(argv=argv, experiment=experiment)
+
+    # Save results
+    experiment.store(csv_file=results_csv_path)
+    print(f"Finished run {seed+1} for dataset {dataset}")
 
 
 def run_standard_dreamer(

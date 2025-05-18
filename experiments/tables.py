@@ -53,6 +53,7 @@ def process_experiment_results(
     grouped.columns = ['_'.join(col).strip() for col in grouped.columns.values]
     grouped.reset_index(inplace=True)
 
+    grouped.to_csv(csv_path.replace(".csv", "_agg.csv"))
     return grouped
 
 

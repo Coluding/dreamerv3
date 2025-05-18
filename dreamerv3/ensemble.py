@@ -1,16 +1,19 @@
 import jax
 import jax.numpy as jnp
 from typing import Dict, List, Callable, Optional, Tuple, Literal, Union
-import numpy as np
+import embodied.jax.nets as nn
+from embodied.jax.expl import DisagEnsemble
 from dreamerv3 import rssm
 from embodied.jax.heads import MLPHead
 import elements
+import time
+import random
 
 
 class EnsembleController:
     def __init__(
             self,
-            ensembles: List[rssm.RSSM],
+            ensembles: Union[List[rssm.RSSM], DisagEnsemble],
             horizon: int,
             rew_heads: Union[List[MLPHead], MLPHead],
             exploration_type: Literal["state_disagreement", "reward_variance"] = "state_disagreement",
@@ -18,11 +21,12 @@ class EnsembleController:
             reward_scale: float = 1.0,
             noise_scale: float = 0.1,
             ensemble_size: int = 5,
+            seed: int = 1,
             add_mean: bool = False
     ):
         """
         Args:
-            ensembles: List of world models (or single model for perturbed_starts)
+            ensembles: List of world models (or single model for perturbed_starts) or
             horizon: Planning horizon
             rew_heads: List of reward predictor heads (one per ensemble member)
             exploration_type: Either "state_disagreement" or "reward_variance"
@@ -56,6 +60,8 @@ class EnsembleController:
         self.exploration_type = exploration_type
         self.reward_scale = reward_scale
         self.noise_scale = noise_scale
+        self.seed = seed
+
 
     def observe_ensemble(
             self,
@@ -79,22 +85,37 @@ class EnsembleController:
 
         return new_carries, all_entries, all_feats
 
+    def prepare_data(self, carries: Dict, policy_fn, training: bool = True):
+        _, feat, actions = self.models.wm.imagine(carries, policy_fn, self.horizon, training)
+        actembed = nn.DictConcat(self.models.wm.act_space, 1)(actions)
+        actembed = self.models.wm.embed_action(actembed)
+        return {**feat, "action": actembed}
+
     def imagine_ensemble(
             self,
             carries: Dict,
             policy_fn: Callable,
-            training: bool = True
+            training: bool = True,
     ) -> Tuple[List, List]:
         """Run imagination step for all ensemble members or perturbed starting points."""
         all_feats = []
         all_actions = []
+
+        if isinstance(self.models, DisagEnsemble):
+            data = self.prepare_data(carries, policy_fn, training)
+            ensemble_stoch = self.models(data, return_logits=False)
+            ensemble_feats = {"deter": jnp.repeat(data["deter"][:, 1:, ...], len(self.models.nets)).reshape(len(self.models),
+                                                                                                *data["deter"][:, 1:, ...].shape),
+                              "stoch": ensemble_stoch[:, :, :-1, ...]}
+
+            return ensemble_feats, None
 
         if self.ensemble_method == "perturbed_starts":
             # Create perturbed versions of the starting state
             model = self.models[0]  # We only have one model
             
             # Generate random keys for noise
-            rng_key = jax.random.PRNGKey(0)  # You might want to pass this as an argument
+            rng_key = jax.random.PRNGKey(self.seed)
             keys = jax.random.split(rng_key, self.ensemble_size)
             
             # Function to add noise to a carry
@@ -153,6 +174,7 @@ class EnsembleController:
         Compute disagreement based on either state variance or reward prediction variance.
         """
         # Imagine trajectories for each ensemble member or perturbed starting point
+
         ensemble_feats, _ = self.imagine_ensemble(carries, policy_fn, training)
 
         if self.exploration_type == "state_disagreement":
@@ -164,7 +186,7 @@ class EnsembleController:
             ], axis=-1)
 
             # Compute variance across ensemble dimension
-            disagreement = jnp.var(combined_states, axis=0)  # [batch, horizon, state_dim]
+            disagreement = jnp.std(combined_states, axis=0)  # [batch, horizon, state_dim]
             disagreement = jnp.mean(disagreement, axis=-1)  # [batch, horizon]
 
         else:  # reward_variance
@@ -180,7 +202,7 @@ class EnsembleController:
             apply_rew_head = lambda feat_tensor: rew_head(feat_tensor, 2).pred()
             reward_preds = jax.vmap(apply_rew_head)(combined_states)
             mean_reward = jnp.mean(reward_preds, axis=0)
-            disagreement = jnp.var(reward_preds, axis=0)  # [batch, horizon]
+            disagreement = jnp.std(reward_preds, axis=0)  # [batch, horizon]
 
             if self.add_mean:
                 disagreement += mean_reward

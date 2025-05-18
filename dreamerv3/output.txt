@@ -1,0 +1,2 @@
+Traced<ShapedArray(float32[64,14,640])>with<DynamicJaxprTrace(level=1/0)>
+Traced<ShapedArray(float32[64,14,640])>with<DynamicJaxprTrace(level=1/0)>

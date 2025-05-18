@@ -7,12 +7,12 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 8
+  batch_size: 4
   batch_length: 64
   report_length: 32
   consec_train: 1
   consec_report: 1
-  replay_context: 1
+  replay_context: 0
   random_agent: False
   clock_addr: ''
   clock_port: ''
@@ -41,8 +41,8 @@ defaults:
   replay:
     size: 5e6
     online: True
-    fracs: {uniform: 0.0, priority: 1.0, recency: 0.0}
-    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: False}
+    fracs: {uniform: 1.0, priority: 0.0, recency: 0.0}
+    prio: {exponent: 0.8, maxfrac: 0.5, initial: 1.0, zero_on_sample: True}
     priosignal: model
     recexp: 1.0
     chunksize: 1024
@@ -51,8 +51,8 @@ defaults:
     steps: 1e10
     duration: 0
     train_ratio: 32.0
-    log_every: 120
-    report_every: 300
+    log_every: 5
+    report_every: 10
     save_every: 900
     envs: 16
     eval_envs: 4
@@ -118,11 +118,15 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
-    use_intrinsic: True
+    use_intrinsic: False
     intrinsic:
-      ensemble_size: 2
+      ensemble_size: 5
+      expl_opt: {lr: 1e-4, eps: 1e-5, beta1: 0.9, beta2: 0.999, momentum: True, wd: 0.0, schedule: const, warmup: 0}
+      disag_head_inputs: [deter, stoch, action]
+      disag_head: {layers: 5, act: silu, norm: layer}
+      disag_target: [stoch]
       model_size: 1 #TODO need to adjust the decoder size if model_size != 1
-      learn_strategy: "perturbed_starts" #ema, joint #perturbed_starts
+      learn_strategy: "joint_mlp" #ema, joint_wm, perturbed_starts, joint_mlp
       ema_decay: 0.25 # rate for SlowModel
       update_every: 1
       exploration_type: "reward_variance" #state_disagreement # reward_variance

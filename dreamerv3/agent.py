@@ -81,11 +81,9 @@ class Agent(embodied.jax.Agent):
 
     self.modules = [
       self.dyn, self.enc, self.dec, self.rew, self.con, self.pol, self.val]
-    self.opt = embodied.jax.Optimizer(
-      self.modules, self._make_opt(**config.opt), summary_depth=1,
-      name='opt')
 
     self.ensemble = None
+    self.ensemble_modules = [] 
 
     if config.use_intrinsic:
       print("-"*40 + "-----You are using intrinsic rewards!-----" + "-"*40)
@@ -93,7 +91,10 @@ class Agent(embodied.jax.Agent):
       print("The exploration type is: " + config.intrinsic["exploration_type"])
       print("-" * 100)
       self.initialize_ensemble(act_space, enc_space, dec_space)
-      
+
+      if self.config.intrinsic.learn_strategy == "joint":
+        self.modules += self.ensemble_modules 
+
       self.ens_controller = EnsembleController(
         ensembles=self.ensemble if self.config.intrinsic["learn_strategy"] != "perturbed_starts" else [self.dyn],
         horizon=self.config.intrinsic["imag_horizon"],
@@ -103,6 +104,9 @@ class Agent(embodied.jax.Agent):
         reward_scale=self.config.intrinsic["reward_scale"],
         add_mean=self.config.intrinsic["add_mean"],
       )
+    self.opt = embodied.jax.Optimizer(
+    self.modules, self._make_opt(**config.opt), summary_depth=1, name='opt'
+    )
 
   @property
   def policy_keys(self):
@@ -163,20 +167,11 @@ class Agent(embodied.jax.Agent):
     combined_datarrr = [self._apply_replay_context(carry[whyeasynames], data) for whyeasynames in range(len(carry))]
     carry, obs, prevact, stepid = combined_datarrr[0]
     metrics, (carry, entries, outs, mets) = self.opt(
-        self.loss, carry, obs, prevact, training=True, has_aux=True)
-
-    if self.config.use_intrinsic:
-      if self.config.intrinsic.learn_strategy == "joint":
-        metrics_ens, _ = self.ensemble_opt(
-        self.joint_world_model_loss,
-        carry=carry, obs=obs, prevact=prevact,
-        training=True, has_aux=True
-    )
-        metrics.update(metrics_ens)
-
-      elif self.config.intrinsic.learn_strategy == "ema":
-        for model in self.ensemble:
-          model.update()     
+       self.combined_loss, carry, obs, prevact, training=True, has_aux=True)
+  
+    if (self.config.use_intrinsic and self.config.intrinsic.learn_strategy == "ema"):
+      for slow in self.ensemble:
+        slow.update()    
 
     metrics.update(mets)
     image_prio = metrics.pop('image_loss_prio')
@@ -272,6 +267,35 @@ class Agent(embodied.jax.Agent):
 
     wm_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
     return wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat)
+
+  def combined_loss(self, carry, obs, prevact, training, **kw):
+    # main Dreamer-V3 loss 
+    main_loss, (carry, ent, outs, main_mets) = self.loss(
+        carry, obs, prevact, training, **kw)
+
+    # no ensemble, return main loss 
+    if (not self.config.use_intrinsic
+        or self.config.intrinsic.learn_strategy != "joint"):
+        return main_loss, (carry, ent, outs, prefix(main_mets, "main"))
+
+    # ensemble loss 
+    ens_loss, (_, _, _, ens_mets) = self.joint_world_model_loss(
+        carry=carry, obs=obs, prevact=prevact, training=training, **kw)
+
+    prios = {k: main_mets[k] for k in (
+        "image_loss_prio",
+        "val_loss_prio",
+        "ret_prio",
+    )}
+
+    loss = 0.5 * (main_loss + ens_loss)
+    metrics = {
+        **prios,                               
+        **prefix(main_mets, "main"),           
+        **prefix(ens_mets,  "intrinsic"),      
+    }
+    return loss, (carry, ent, outs, metrics)
+
 
   def loss(self, carry, obs, prevact, training, idx: int = -1):
     enc_carry, dyn_carry, dec_carry = carry
@@ -377,6 +401,13 @@ class Agent(embodied.jax.Agent):
     metrics['image_loss_prio'] = sg(losses['image']).copy()
     metrics.update({f'loss/{k}': v.mean() for k, v in losses.items()})
     loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
+
+    if self.config.use_intrinsic and self.config.intrinsic.learn_strategy == "joint":
+      ens_loss, (_, _, _, ens_metrics) = self.joint_world_model_loss(
+          carry=carry, obs=obs, prevact=prevact, training=training
+      )
+      loss = 0.5 *(ens_loss + loss)
+      metrics.update(prefix(ens_metrics, "intrinsic"))
 
     carry = (enc_carry, dyn_carry, dec_carry)
     entries = (enc_entries, dyn_entries, dec_entries)
@@ -577,22 +608,15 @@ class Agent(embodied.jax.Agent):
             name=f'con_ensemble'
           )
         
-        ## Added 
-        ensemble_modules = [
-        *self.ensemble, # unpack list of ensemble models 
+        # Add ensemble modules to the main modules list
+        self.ensemble_modules = [
+        *self.ensemble,
         self.scaled_encoder,
         self.scaled_decoder,
         self.scaled_reward_head,
-        self.scaled_con
-      ]
-        # create a single optimizer for all ensemble members
-        self.ensemble_opt = embodied.jax.Optimizer(
-            ensemble_modules,
-            self._make_opt(**self.config.opt),
-            summary_depth=1,
-            name=f'opt_ensemble'
-          ) 
-
+        self.scaled_con,
+        ]
+        
       case "ema":
         # TODO initialize differently --> maybe different rate?
         assert self.config.intrinsic["model_size"] == 1, "EMA only works with model_size = 1"

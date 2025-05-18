@@ -184,7 +184,7 @@ procgen:
 
 atari100k:
   task: atari100k_pong
-  run: {steps: 1.1e5, envs: 1, train_ratio: 256}
+  run: {steps: 4e5, envs: 1, train_ratio: 256}
 
 crafter:
   task: crafter_reward

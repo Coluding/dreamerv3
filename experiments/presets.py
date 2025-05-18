@@ -34,9 +34,6 @@ REPLAY_LATENT_DISAGREEMENT_CFG = {
     "agent.intrinsic.reward_type": "disagreement", # prediction_error, disagreement, max_disagreement
 }
 
-# TODO: Use boxing and krull from atari100k
 
-# Think about using and env that dreamer is not yet performing well on
-# Which tasks do we run for? Maybe just pick one.
 # OpenAI: Cup Catch or Reacher
 # 12h for RoboDesk (they used reward heads for every task)

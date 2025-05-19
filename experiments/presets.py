@@ -1,15 +1,15 @@
 DEFAULT_RUN_CFG = {
-    "logdir": r"~/logdir/{timestamp}",
+    "logdir": r"~/logdir/default/{timestamp}",
     "run.train_ratio": 32,
-    "run.duration": 120,
-    "run.steps": 2000,
+    # "run.duration": 120,
+    # "run.steps": 2000,
 }
 
 REPLAY_BUFFER_RUN_CFG = {
-    "logdir": r"~/logdir/{timestamp}", 
+    "logdir": r"~/logdir/optimized_replay_buffer/{timestamp}", 
     "run.train_ratio": 32,
-    "run.duration": 120,
-    "run.steps": 2000,
+    # "run.duration": 120,
+    # "run.steps": 2000,
     # "replay.fracs": {"uniform": 0.0, "priority": 1.0, "recency": 0.0},
     "replay.fracs.uniform": 0.0,
     "replay.fracs.priority": 1.0,
@@ -23,7 +23,7 @@ REPLAY_BUFFER_RUN_CFG = {
 }
 
 REPLAY_LATENT_DISAGREEMENT_CFG = {
-    "logdir": r"~/logdir/{timestamp}", 
+    "logdir": r"~/logdir/latent_reward_disagreement/{timestamp}", 
     "run.train_ratio": 32,
     "run.duration": 0,
     "run.steps": 4000,

@@ -11,7 +11,7 @@ python experiments.experiments.py experiment_function_name --optional_function_a
 ```
 For instance, to run the standard experiment from the DreamerV3 Readme page:
 ```
-python experiments.experiments.py run_standard_dreamer --name "Test Run to check functionality" --description "Just a run with 2 seeds for testing purposes" --num_seeds 2
+python experiments/experiments.py run_standard_dreamer --name "Test Run to check functionality" --description "Just a run with 2 seeds for testing purposes" --num_seeds 2
 ```
 <br>
 

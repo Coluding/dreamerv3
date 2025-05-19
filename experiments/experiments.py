@@ -50,6 +50,7 @@ def make_run(
     run_config["configs"] = dataset
     if task:
         run_config["task"] = task
+        print("[WARNING] Make sure that the number of environment steps in the main config is set to 400k!")
     
     # First setup experiment instance
     experiment = Experiment(

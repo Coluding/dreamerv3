@@ -4,6 +4,7 @@ import chex
 import elements
 import embodied.jax
 import embodied.jax.nets as nn
+import embodied.jax.expl as expl
 import jax
 import jax.numpy as jnp
 import ninjax as nj
@@ -97,11 +98,12 @@ class Agent(embodied.jax.Agent):
       self.ens_controller = EnsembleController(
         ensembles=self.ensemble if self.config.intrinsic["learn_strategy"] != "perturbed_starts" else [self.dyn],
         horizon=self.config.intrinsic["imag_horizon"],
-        rew_heads=self.scaled_reward_head if self.config.intrinsic["learn_strategy"] not in ["perturbed_starts", "ema"] else self.rew,
+        rew_heads=self.scaled_reward_head if self.config.intrinsic["learn_strategy"] not in ["perturbed_starts", "ema", "joint_mlp"] else self.rew,
         ensemble_method="perturbed_starts" if self.config.intrinsic["learn_strategy"] == "perturbed_starts" else "multiple_models",
         exploration_type=self.config.intrinsic["exploration_type"],
         reward_scale=self.config.intrinsic["reward_scale"],
         add_mean=self.config.intrinsic["add_mean"],
+        seed=self.config.seed
       )
 
   @property
@@ -166,11 +168,19 @@ class Agent(embodied.jax.Agent):
         self.loss, carry, obs, prevact, training=True, has_aux=True)
 
     if self.config.use_intrinsic:
-      if self.config.intrinsic.learn_strategy == "joint":
+      if self.config.intrinsic.learn_strategy == "joint_mlp":
+          policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
+          data_prep = self.ens_controller.prepare_data(carry[1], policyfn)
+          metrics_ens = self.ensemble_opt(
+              self.ensemble.loss,
+              data=data_prep
+          )
+          metrics.update(metrics_ens)
+
+      elif self.config.intrinsic.learn_strategy == "joint_wm":
         metrics_ens, _ = self.ensemble_opt(
-          self.joint_world_model_loss,
-          carry=carry, obs=obs, prevact=prevact,
-          training=True, has_aux=True
+          self.ensemble.loss,
+          data=carry
         )
         metrics.update(metrics_ens)
 
@@ -322,7 +332,6 @@ class Agent(embodied.jax.Agent):
 
     if self.config.use_intrinsic:
       intrinsic_reward = self.compute_intrinsic_reward(starts)
-      metrics['intrinsic_reward'] = intrinsic_reward
 
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
@@ -347,7 +356,7 @@ class Agent(embodied.jax.Agent):
         update=training,
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
-        intrinsic_reward=intrinsic_reward if "intrinsic_reward" in metrics else None,
+        intrinsic_reward=intrinsic_reward if self.config.use_intrinsic else None,
         intrinsic_reward_lambda=self.config.intrinsic["intrinsic_reward_lambda"],
         **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
@@ -543,7 +552,20 @@ class Agent(embodied.jax.Agent):
     binary = elements.Space(bool, (), 0, 2)
     #TODO: I think the model size cannot vary, otherwise the policy would not work anymore and we would also need a scaled_down policy
     match self.config.intrinsic["learn_strategy"]:
-      case "joint":
+      case "joint_mlp":
+          hidden_dim = self.config.dyn.rssm["stoch"] * self.config.dyn.rssm["classes"]
+          self.ensemble = expl.DisagEnsemble(wm=self.dyn, hidden_dim = hidden_dim,
+                                             classes=self.config.dyn.rssm["classes"],
+                                             config=self.config.intrinsic,
+                                             name="mlp_ensemble")
+
+          self.ensemble_opt = embodied.jax.Optimizer(
+            self.ensemble.get_modules(),
+            self._make_opt(**self.config.intrinsic.expl_opt),
+            summary_depth=1,
+            name=f'opt_ensemble'
+          )
+      case "joint_wm":
         # Initialize ensemble RSSMs
         self.ensemble = [
           rssm.RSSM(
@@ -624,6 +646,8 @@ class Agent(embodied.jax.Agent):
     if not self.config.use_intrinsic:
         return 0.0
 
+    #TODO Use the imagined trajectory from self.loss() instead of running anothher imagaiantion
+
     # I think we would want to use the same starts for imagination as in the imagination part of the loss
     # Why? In the end, we would want to determine the LDA for state s by aggregating the intrinsic reward when starting at that state
     # TODO: Wait a minute: If we do that, we can also frame this maybe as a goal conditioned problem like in PEG?
@@ -663,7 +687,10 @@ def imag_loss(
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
     intrinsic_reward_expanded_1_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
-    rew = rew + intrinsic_reward_expanded_1_entry * intrinsic_reward_lambda
+    intrinsic_reward_expanded_2_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_1_entry), axis=-1)
+
+    extrinsic_rew = rew.copy()
+    rew = rew + intrinsic_reward_expanded_2_entry * intrinsic_reward_lambda
 
   voffset, vscale = valnorm.stats()
   val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
@@ -690,13 +717,15 @@ def imag_loss(
   tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
   losses['value'] = sg(weight[:, :-1]) * (
       value.loss(sg(tar_padded)) +
-      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1] # we extract the value loss here and store it
+      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]  # we extract the value loss here and store it
 
   ret_normed = (ret - roffset) / rscale
   metrics['adv'] = adv.mean()
   metrics['adv_std'] = adv.std()
   metrics['adv_mag'] = jnp.abs(adv).mean()
   metrics['rew'] = rew.mean()
+  metrics["intrinsic_reward"] = intrinsic_reward.mean() if intrinsic_reward is not None else 0
+  metrics["extrinsic_reward"] = extrinsic_rew.mean() if intrinsic_reward is not None else rew.mean()
   metrics['con'] = con.mean()
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()

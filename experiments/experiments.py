@@ -1,5 +1,5 @@
-from base import Experiment
-from presets import *
+from experiments.base import Experiment
+from experiments.presets import *
 from dreamerv3.main import main
 from typing import Iterable
 
@@ -71,6 +71,7 @@ def make_run(
     # Save results
     experiment.store(csv_file=results_csv_path)
     print(f"Finished run {seed+1} for dataset {dataset}")
+
 
 
 def run_standard_dreamer(

@@ -40,3 +40,4 @@ REPLAY_LATENT_DISAGREEMENT_CFG = {
 # Which tasks do we run for? Maybe just pick one.
 # OpenAI: Cup Catch or Reacher
 # 12h for RoboDesk (they used reward heads for every task)
+

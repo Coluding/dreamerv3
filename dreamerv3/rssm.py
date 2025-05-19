@@ -84,14 +84,14 @@ class RSSM(nj.Module):
       x = self.sub(f'obs{i}', nn.Linear, self.hidden, **self.kw)(x)
       x = nn.act(self.act)(self.sub(f'obs{i}norm', nn.Norm, self.norm)(x))
     logit = self._logit('obslogit', x)
-    stoch = nn.cast(self._dist(logit).sample(seed=nj.seed()))
+    stoch = nn.cast(self._dist(logit).sample(seed=nj.seed())) #TODO: Is this OHE or not??
     carry = dict(deter=deter, stoch=stoch)
     feat = dict(deter=deter, stoch=stoch, logit=logit) # full information for los computation
     entry = dict(deter=deter, stoch=stoch)
     assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
     return carry, (entry, feat)
 
-  def imagine(self, carry, policy, length, training, single=False):
+  def imagine(self, carry, policy, length, training, single=False,):
     if single:
       action = policy(sg(carry)) if callable(policy) else policy
       actemb = nn.DictConcat(self.act_space, 1)(action)
@@ -127,6 +127,13 @@ class RSSM(nj.Module):
     feat = nn.cast(dict(deter=deter, stoch=stoch, logit=logit))
     assert all(x.dtype == nn.COMPUTE_DTYPE for x in (deter, stoch, logit))
     return carry, (feat, action)
+
+  def embed_action(self, action):
+    x2 = self.sub('dynin2', nn.Linear, self.hidden, **self.kw)(action)
+    x2 = nn.act(self.act)(self.sub('dynin2norm', nn.Norm, self.norm)(x2))
+
+    return x2
+
   def loss(self, carry, tokens, acts, reset, training):#
     """
     Just the Kl divergence loss
@@ -185,7 +192,7 @@ class RSSM(nj.Module):
 
   def _dist(self, logits):
     out = embodied.jax.outs.OneHot(logits, self.unimix)
-    out = embodied.jax.outs.Agg(out, 1, jnp.sum)
+    out = embodied.jax.outs.Agg(out, 1, jnp.sum) #TODO: What is this doing?
     return out
 
 

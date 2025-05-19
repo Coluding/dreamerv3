@@ -8,7 +8,7 @@ import csv
 import json
 from collections import defaultdict
 import numpy as np
-from presets import *
+from experiments.presets import *
 
 
 class Experiment:

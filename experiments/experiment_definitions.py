@@ -45,8 +45,8 @@ def make_run(
         dataset: str = None,
         task: str = None
     ) -> None:
-
-    print(f"Starting run {seed+1} for dataset {dataset}")
+    task_str = "" if task is None else f" and task {task}"
+    print(f"Starting run {seed+1} for dataset {dataset}" + task_str)
     run_config["configs"] = dataset
     if task:
         run_config["task"] = task

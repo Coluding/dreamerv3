@@ -331,7 +331,7 @@ class Agent(embodied.jax.Agent):
     starts = self.dyn.starts(dyn_entries, dyn_carry, K) # we only use the last K steps of oru observed trajectories as starting points for imagination. We flatten all of the corresponding hidden states into an array of shape B*K,D which are the starting points for the imagination
 
     if self.config.use_intrinsic:
-      intrinsic_reward = self.compute_intrinsic_reward(starts)
+        intrinsic_reward = self.compute_intrinsic_reward(starts=starts,)
 
     policyfn = lambda feat: sample(self.pol(self.feat2tensor(feat), 1))
     _, imgfeat, imgprevact = self.dyn.imagine(starts, policyfn, H, training) # imgfeat are the
@@ -641,7 +641,7 @@ class Agent(embodied.jax.Agent):
         scaled_config[key] = int(scaled_config[key] * scale_factor)
     return scaled_config
 
-  def compute_intrinsic_reward(self, starts: List[Dict[str, jnp.ndarray]]):
+  def compute_intrinsic_reward(self, starts: List[Dict[str, jnp.ndarray]],):
     """Compute intrinsic reward using the ensemble controller."""
     if not self.config.use_intrinsic:
         return 0.0
@@ -687,8 +687,8 @@ def imag_loss(
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
     intrinsic_reward_expanded_1_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
-    intrinsic_reward_expanded_2_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_1_entry), axis=-1)
-
+    if intrinsic_reward_expanded_1_entry.shape != rew.shape():
+        intrinsic_reward_expanded_2_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_1_entry), axis=-1)
     extrinsic_rew = rew.copy()
     rew = rew + intrinsic_reward_expanded_2_entry * intrinsic_reward_lambda
 

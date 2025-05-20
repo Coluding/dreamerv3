@@ -686,11 +686,11 @@ def imag_loss(
 
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
-    intrinsic_reward_expanded_1_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
-    if intrinsic_reward_expanded_1_entry.shape != rew.shape():
-        intrinsic_reward_expanded_2_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_1_entry), axis=-1)
+    intrinsic_reward_expanded_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
+    if intrinsic_reward_expanded_entry.shape != rew.shape:
+        intrinsic_reward_expanded_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_entry), axis=-1)
     extrinsic_rew = rew.copy()
-    rew = rew + intrinsic_reward_expanded_2_entry * intrinsic_reward_lambda
+    rew = rew + intrinsic_reward_expanded_entry * intrinsic_reward_lambda
 
   voffset, vscale = valnorm.stats()
   val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step

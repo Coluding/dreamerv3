@@ -4,7 +4,6 @@ import ninjax as nj
 import dreamerv3.rssm as rssm
 tree_map = jax.tree_util.tree_map
 sg = lambda x: tree_map(jax.lax.stop_gradient, x)
-import tensorflow_probability.substrates.jax as tfp
 from typing import Callable
 import embodied
 

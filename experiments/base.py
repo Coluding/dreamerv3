@@ -119,4 +119,10 @@ class Experiment:
             writer = csv.DictWriter(file, fieldnames=all_fields, delimiter=delimiter)
             writer.writeheader()
             for row in rows:
-                writer.writerow({field: row.get(field, "") for field in all_fields})
+                row_dict = {}
+                for field in all_fields:
+                    col_content = row.get(field, "")
+                    if isinstance(col_content, list):
+                        col_content = col_content[-10:]
+                    row_dict[field] = col_content
+                writer.writerow(row_dict)

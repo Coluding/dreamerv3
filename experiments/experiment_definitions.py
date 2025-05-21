@@ -7,7 +7,7 @@ import multiprocessing
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
 DEFAULT_DATASETS = {"atari100k"}
-ATARI_TASKS = {"atari100k_boxing", "atari100k_krull"}
+ATARI_TASKS = {"atari100k_battle_zone", "atari100k_krull"}
 
 
 def run_experiment(
@@ -55,6 +55,7 @@ def make_run(
     ) -> None:
     task_str = "" if task is None else f" and task {task}"
     print(f"Starting run {seed+1} for dataset {dataset}" + task_str)
+    run_config["logdir"] += f"_{task}"
     run_config["configs"] = dataset
     if task:
         run_config["task"] = task

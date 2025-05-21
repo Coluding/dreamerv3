@@ -2,6 +2,7 @@ from experiments.base import Experiment
 from experiments.presets import *
 from dreamerv3.main import main
 from typing import Iterable
+import multiprocessing
 
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
@@ -26,15 +27,22 @@ def run_experiment(
         for dataset in datasets:
             if tasks is not None:
                 for task in tasks:
-                    make_run(
-                        run_config,
-                        name,
-                        description,
-                        seed,
-                        results_csv_path,
-                        dataset,
-                        task
+                    # Create and start a process for each run
+                    process = multiprocessing.Process(
+                        target=make_run,
+                        args=(
+                            run_config.copy(),
+                            name,
+                            description,
+                            seed,
+                            results_csv_path,
+                            dataset,
+                            task
+                        )
                     )
+                    process.start()
+                    # Wait for process to complete before starting next one
+                    process.join()
 
 def make_run(
         run_config: dict = DEFAULT_RUN_CFG, 

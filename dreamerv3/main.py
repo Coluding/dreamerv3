@@ -144,6 +144,7 @@ def make_agent(config):
     return embodied.RandomAgent(obs_space, act_space)
   cpdir = elements.Path(config.logdir)
   cpdir = cpdir.parent if config.replicas > 1 else cpdir
+  num_total_steps = config["run"]["steps"]
   return Agent(obs_space, act_space, elements.Config(
       **config.agent,
       logdir=config.logdir,
@@ -155,6 +156,7 @@ def make_agent(config):
       report_length=config.report_length,
       replica=config.replica,
       replicas=config.replicas,
+      num_total_steps=config["run"]["steps"]
   ))
 
 

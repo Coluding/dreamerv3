@@ -7,7 +7,7 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 16
+  batch_size: 8
   batch_length: 64
   report_length: 32
   consec_train: 1

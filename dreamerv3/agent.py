@@ -11,6 +11,7 @@ import ninjax as nj
 import numpy as np
 import optax
 from typing import Tuple, Union, List, Dict, Literal
+import math
 
 from . import rssm
 from .ensemble import EnsembleController
@@ -34,10 +35,11 @@ class Agent(embodied.jax.Agent):
       r"--- |___/|_| \___\__,_|_|_|_\___|_|  \_/ |___/ ---",
   ]
 
-  def __init__(self, obs_space, act_space, config):
+  def __init__(self, obs_space, act_space, config,):
     self.obs_space = obs_space
     self.act_space = act_space
     self.config = config
+    self.num_total_steps = config.num_total_steps
 
     exclude = ('is_first', 'is_last', 'is_terminal', 'reward')
     enc_space = {k: v for k, v in obs_space.items() if k not in exclude}
@@ -94,7 +96,15 @@ class Agent(embodied.jax.Agent):
       print("The exploration type is: " + config.intrinsic["exploration_type"])
       print("-" * 100)
       self.initialize_ensemble(act_space, enc_space, dec_space)
-      
+
+      self.intrinsic_reward_lambda = nj.Variable(lambda: jnp.array(1, f32), name="intrinsic_reward_lambda")
+      self.intrinsic_step_counter = nj.Variable(lambda: jnp.array(0, jnp.int32), name='step_counter')
+      self.extrinsic_ema = nj.Variable(lambda: jnp.array(0, f32), name="extrinsic_ema")
+      self.decay_rate = nj.Variable(lambda: jnp.array(0.9, f32), name="intrinsic_decay_rate")
+      self.extrinsic_reward_ema_storage = nj.Variable(lambda: jnp.zeros(10_000, f32), name="extrinsic_reward_ema_storage")
+      self.total_steps = nj.Variable(lambda: jnp.array(self.num_total_steps, jnp.int32), name="total_steps")
+
+
       self.ens_controller = EnsembleController(
         ensembles=self.ensemble if self.config.intrinsic["learn_strategy"] != "perturbed_starts" else [self.dyn],
         horizon=self.config.intrinsic["imag_horizon"],
@@ -158,14 +168,14 @@ class Agent(embodied.jax.Agent):
           enc=enc_entry, dyn=dyn_entry, dec=dec_entry)))
     return carry, act, out
 
-  def train(self, carry: Union[List[Dict[str, jnp.ndarray]], Dict[str, jnp.ndarray]], data): # need to go in here
+  def train(self, carry: Union[List[Dict[str, jnp.ndarray]], Dict[str, jnp.ndarray]], data,): # need to go in here
     if not isinstance(carry, list):
       carry = [carry]
 
     combined_datarrr = [self._apply_replay_context(carry[whyeasynames], data) for whyeasynames in range(len(carry))]
     carry, obs, prevact, stepid = combined_datarrr[0]
     metrics, (carry, entries, outs, mets) = self.opt(
-        self.loss, carry, obs, prevact, training=True, has_aux=True)
+        self.loss, carry, obs, prevact, training=True, has_aux=True,)
 
     if self.config.use_intrinsic:
       if self.config.intrinsic.learn_strategy == "joint_mlp":
@@ -283,7 +293,7 @@ class Agent(embodied.jax.Agent):
     wm_loss = sum([v.mean() * self.scales[k] for k, v in losses.items()])
     return wm_loss, (carry, enc_entries, dec_entries, dyn_entries, tokens, repfeat)
 
-  def loss(self, carry, obs, prevact, training, idx: int = -1):
+  def loss(self, carry, obs, prevact, training, idx: int = -1,):
     enc_carry, dyn_carry, dec_carry = carry
     metrics_prefix = lambda x: f'ensemble_{idx}/{x}' if idx >= 0 else ""
     reset = obs['is_first']
@@ -309,6 +319,11 @@ class Agent(embodied.jax.Agent):
     reward_model = self.scaled_reward_head if idx >= 0 else self.rew
     losses['rew'] = reward_model(inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
+
+    count = self.intrinsic_step_counter.read()
+    self.intrinsic_step_counter.write(count + 1)
+    metrics["env_step"] = count
+
     if self.config.contdisc:
       con *= 1 - 1 / self.config.horizon
 
@@ -344,10 +359,23 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgfeat))
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
-
+    rew = self.rew(inp, 2).pred()
+    rew_mean = rew.mean()
+    rew_ema = self.extrinsic_ema.read()
+    decay = self.decay_rate.read()
+    new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
+    metrics["extrinsic_reward_ema"] = new_ema
+    rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+    self.extrinsic_ema.write(new_ema)
+    self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
+    step = self.intrinsic_step_counter.read()
+    total_steps = self.total_steps.read()
+    intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
+    decay = jnp.exp(-2.5 * (step / total_steps))
+    self.intrinsic_reward_lambda.write(decay)
     los, imgloss_out, mets = imag_loss(
         imgact,
-        self.rew(inp, 2).pred(),
+        rew,
         self.con(inp, 2).prob(1),
         self.pol(inp, 2),
         self.val(inp, 2),
@@ -357,7 +385,7 @@ class Agent(embodied.jax.Agent):
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
         intrinsic_reward=intrinsic_reward if self.config.use_intrinsic else None,
-        intrinsic_reward_lambda=self.config.intrinsic["intrinsic_reward_lambda"],
+        intrinsic_reward_lambda=self.intrinsic_reward_lambda.read(),
         **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
@@ -666,6 +694,24 @@ class Agent(embodied.jax.Agent):
     
     return intrinsic_reward
 
+  def _intrinsic_reward_lambda_step(self,):
+
+      if False:
+          ema_storage = self.extrinsic_reward_ema_storage.read()
+          slope = jnp.polyfit(jnp.arange(len(ema_storage)).astype(f32),
+                              ema_storage, deg = 1)[0]
+          intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 0.25))
+          self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
+          return intrinsic_reward_lambda
+
+
+      step = self.intrinsic_step_counter.read()
+      total_steps = self.total_steps.read()
+      intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
+      decay = jnp.exp(-3.5*(step / total_steps))
+
+      self.intrinsic_reward_lambda.write(decay)
+
 
 def imag_loss(
     act, rew, con,
@@ -684,13 +730,15 @@ def imag_loss(
   losses = {}
   metrics = {}
 
+  intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
+
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
     intrinsic_reward_expanded_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
     if intrinsic_reward_expanded_entry.shape != rew.shape:
         intrinsic_reward_expanded_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_entry), axis=-1)
     extrinsic_rew = rew.copy()
-    rew = rew + intrinsic_reward_expanded_entry * intrinsic_reward_lambda
+    rew = (1 - intrinsic_reward_lambda) * rew + intrinsic_reward_expanded_entry * intrinsic_reward_lambda
 
   voffset, vscale = valnorm.stats()
   val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
@@ -719,8 +767,10 @@ def imag_loss(
       value.loss(sg(tar_padded)) +
       slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]  # we extract the value loss here and store it
 
+
   ret_normed = (ret - roffset) / rscale
   metrics['adv'] = adv.mean()
+  metrics["intrinsic_reward_lambda"] = intrinsic_reward_lambda
   metrics['adv_std'] = adv.std()
   metrics['adv_mag'] = jnp.abs(adv).mean()
   metrics['rew'] = rew.mean()

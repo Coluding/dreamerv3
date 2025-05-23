@@ -77,6 +77,10 @@ class Agent(embodied.jax.Agent):
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
 
+    # ------------------------------- Intrinsic Reward Normalizer -------------------------------
+    self.ext_rewnorm = embodied.jax.Normalize(**config.retnorm, name='ext_rewnorm')
+    self.int_rewnorm = embodied.jax.Normalize(**config.retnorm, name='int_rewnorm')
+
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
     scales.update({k: rec for k in dec_space})
@@ -100,9 +104,11 @@ class Agent(embodied.jax.Agent):
       self.intrinsic_reward_lambda = nj.Variable(lambda: jnp.array(1, f32), name="intrinsic_reward_lambda")
       self.intrinsic_step_counter = nj.Variable(lambda: jnp.array(0, jnp.int32), name='step_counter')
       self.extrinsic_ema = nj.Variable(lambda: jnp.array(0, f32), name="extrinsic_ema")
-      self.decay_rate = nj.Variable(lambda: jnp.array(0.9, f32), name="intrinsic_decay_rate")
-      self.extrinsic_reward_ema_storage = nj.Variable(lambda: jnp.zeros(10_000, f32), name="extrinsic_reward_ema_storage")
-      self.total_steps = nj.Variable(lambda: jnp.array(self.num_total_steps, jnp.int32), name="total_steps")
+      self.decay_rate = nj.Variable(lambda: jnp.array(0.65, f32), name="intrinsic_decay_rate")
+      self.extrinsic_reward_ema_storage = nj.Variable(lambda: jnp.zeros(500, f32), name="extrinsic_reward_ema_storage")
+      self.extrinsic_reward_ema_storage_norm = nj.Variable(lambda: jnp.zeros(500, f32), name="extrinsic_reward_ema_storage_normalized")
+
+      self.total_steps = nj.Variable(lambda: jnp.array(400_000, jnp.int32), name="total_steps")
 
 
       self.ens_controller = EnsembleController(
@@ -361,18 +367,34 @@ class Agent(embodied.jax.Agent):
     inp = self.feat2tensor(imgfeat)
     rew = self.rew(inp, 2).pred()
     rew_mean = rew.mean()
-    rew_ema = self.extrinsic_ema.read()
-    decay = self.decay_rate.read()
-    new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
-    metrics["extrinsic_reward_ema"] = new_ema
-    rew_ema_storage = self.extrinsic_reward_ema_storage.read()
-    self.extrinsic_ema.write(new_ema)
-    self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
-    step = self.intrinsic_step_counter.read()
-    total_steps = self.total_steps.read()
-    intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
-    decay = jnp.exp(-2.5 * (step / total_steps))
-    self.intrinsic_reward_lambda.write(decay)
+    if self.config.use_intrinsic:
+        rew_ema = self.extrinsic_ema.read()
+        decay = self.decay_rate.read()
+        new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
+        rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+        self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
+        metrics["extrinsic_reward_ema"] = new_ema
+        rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+        min_val = jnp.min(rew_ema_storage)
+        max_val = jnp.max(rew_ema_storage)
+        scaled_storage = (rew_ema_storage - min_val) / (max_val - min_val + 1e-8)
+        self.extrinsic_reward_ema_storage_norm.write(scaled_storage)
+        self.extrinsic_ema.write(new_ema)
+        step = self.intrinsic_step_counter.read()
+        total_steps = self.total_steps.read()
+        if True:
+            ema_storage = self.extrinsic_reward_ema_storage.read()
+            slope = ema_storage[-1] - ema_storage[0]
+            metrics["slope"] = slope
+            metrics["min_ema"] = jnp.min(scaled_storage)
+            metrics["max_ema"] = jnp.max(scaled_storage)
+            intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 0.5))
+            self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
+        else:
+            intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
+            decay = jnp.exp(-2.5 * (step / total_steps))
+            self.intrinsic_reward_lambda.write(decay)
+
     los, imgloss_out, mets = imag_loss(
         imgact,
         rew,
@@ -385,7 +407,7 @@ class Agent(embodied.jax.Agent):
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
         intrinsic_reward=intrinsic_reward if self.config.use_intrinsic else None,
-        intrinsic_reward_lambda=self.intrinsic_reward_lambda.read(),
+        intrinsic_reward_lambda=self.intrinsic_reward_lambda.read() if self.config.use_intrinsic else None,
         **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
@@ -674,7 +696,7 @@ class Agent(embodied.jax.Agent):
     if not self.config.use_intrinsic:
         return 0.0
 
-    #TODO Use the imagined trajectory from self.loss() instead of running anothher imagaiantion
+    #TODO Use the imagined trajectory from self.loss() instead of running anothher imagination
 
     # I think we would want to use the same starts for imagination as in the imagination part of the loss
     # Why? In the end, we would want to determine the LDA for state s by aggregating the intrinsic reward when starting at that state
@@ -696,7 +718,7 @@ class Agent(embodied.jax.Agent):
 
   def _intrinsic_reward_lambda_step(self,):
 
-      if False:
+      if True:
           ema_storage = self.extrinsic_reward_ema_storage.read()
           slope = jnp.polyfit(jnp.arange(len(ema_storage)).astype(f32),
                               ema_storage, deg = 1)[0]
@@ -726,76 +748,99 @@ def imag_loss(
     slowreg=1.0,
     intrinsic_reward=None,
     intrinsic_reward_lambda=1.0,
-):
-  losses = {}
-  metrics = {}
+    intr_retnorm=None,
+    ):
+    losses = {}
+    metrics = {}
 
-  intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
+    if intrinsic_reward is not None:  # TODO get a feeling for the intrinsic reward scale
+        intrinsic_reward_lambda = jnp.clip(intrinsic_reward_lambda, max=1, min=0.1)
 
-  if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]
+
     intrinsic_reward_expanded_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
+
     if intrinsic_reward_expanded_entry.shape != rew.shape:
-        intrinsic_reward_expanded_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_entry), axis=-1)
+        intrinsic_reward_expanded_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_entry),
+                                                        axis=-1)
     extrinsic_rew = rew.copy()
     rew = (1 - intrinsic_reward_lambda) * rew + intrinsic_reward_expanded_entry * intrinsic_reward_lambda
 
-  voffset, vscale = valnorm.stats()
-  val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
-  slowval = slowvalue.pred() * vscale + voffset
-  tarval = slowval if slowtar else val
-  disc = 1 if contdisc else 1 - 1 / horizon
-  weight = jnp.cumprod(disc * con, 1) / disc
-  last = jnp.zeros_like(con)
-  term = 1 - con # rew += intrinsic_reward
-  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam) # target lambda return
+    voffset, vscale = valnorm.stats()
+    val = value.pred() * vscale + voffset # normalize values -> Shape B*H, H --> Values for each imagined step
+    slowval = slowvalue.pred() * vscale + voffset
+    tarval = slowval if slowtar else val
+    disc = 1 if contdisc else 1 - 1 / horizon
+    weight = jnp.cumprod(disc * con, 1) / disc
+    last = jnp.zeros_like(con)
+    term = 1 - con # rew += intrinsic_reward
+    ret_ext = lambda_return(last, term, extrinsic_rew, tarval, tarval, disc, lam)
+    if intrinsic_reward is not None:
+        ret_int = lambda_return(last, term, intrinsic_reward_expanded_entry,  # intrinsic-only reward
+                        tarval, tarval, disc, lam)
+    else:
+        ret_int = None
 
-  roffset, rscale = retnorm(ret, update)
-  adv = (ret - tarval[:, :-1]) / rscale # advantage as difference between return and value (normalized) ignoring the last step (because we have no return for the last step)
-  aoffset, ascale = advnorm(adv, update)
-  adv_normed = (adv - aoffset) / ascale
-  logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
-  ents = {k: v.entropy()[:, :-1] for k, v in policy.items()}
-  policy_loss = sg(weight[:, :-1]) * -(
-      logpi * sg(adv_normed) + actent * sum(ents.values()))
-  losses['policy'] = policy_loss
+    roff, rscale = retnorm(ret_ext, update)
+    ret_ext_n = (ret_ext - roff) / rscale
 
-  voffset, vscale = valnorm(ret, update) # this is important now. Here we can extract the value loss
-  tar_normed = (ret - voffset) / vscale
-  tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
-  losses['value'] = sg(weight[:, :-1]) * (
-      value.loss(sg(tar_padded)) +
-      slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]  # we extract the value loss here and store it
+    # intrinsic
+    if ret_int is not None and intr_retnorm is not None:
+        ioff, iscale = intr_retnorm(ret_int, update)
+        ret_int_n = (ret_int - ioff) / iscale
+    else:
+        ret_int_n = ret_int
 
+    # --- 5) mix them back together at return level ---
+    if ret_int_n is not None:
+        ret = (1 - intrinsic_reward_lambda) * ret_ext_n + intrinsic_reward_lambda * ret_int_n
+    else:
+        ret = ret_ext_n
 
-  ret_normed = (ret - roffset) / rscale
-  metrics['adv'] = adv.mean()
-  metrics["intrinsic_reward_lambda"] = intrinsic_reward_lambda
-  metrics['adv_std'] = adv.std()
-  metrics['adv_mag'] = jnp.abs(adv).mean()
-  metrics['rew'] = rew.mean()
-  metrics["intrinsic_reward"] = intrinsic_reward.mean() if intrinsic_reward is not None else 0
-  metrics["extrinsic_reward"] = extrinsic_rew.mean() if intrinsic_reward is not None else rew.mean()
-  metrics['con'] = con.mean()
-  metrics['ret'] = ret_normed.mean()
-  metrics['val'] = val.mean()
-  metrics['val_loss_prio'] = sg(losses['value']).copy()
-  metrics["ret_prio"] = ret_normed.copy()
-  metrics['tar'] = tar_normed.mean()
-  metrics['weight'] = weight.mean()
-  metrics['slowval'] = slowval.mean()
-  metrics['ret_min'] = ret_normed.min()
-  metrics['ret_max'] = ret_normed.max()
-  metrics['ret_rate'] = (jnp.abs(ret_normed) >= 1.0).mean()
-  for k in act:
-    metrics[f'ent/{k}'] = ents[k].mean()
+    adv = (ret[:, :-1] - tarval[:, :-1])  # since ret already normalized ---> TODO: CHeck if it works
+    aoff, ascale = advnorm(adv, update)
+    adv_normed = (adv - aoff) / ascale
+    logpi = sum([v.logp(sg(act[k]))[:, :-1] for k, v in policy.items()])
+    ents = {k: v.entropy()[:, :-1] for k, v in policy.items()}
+    policy_loss = sg(weight[:, :-1]) * -(
+    logpi * sg(adv_normed) + actent * sum(ents.values()))
+    losses['policy'] = policy_loss
+
+    voffset, vscale = valnorm(ret, update) # this is important now. Here we can extract the value loss
+    tar_normed = (ret - voffset) / vscale
+    tar_padded = jnp.concatenate([tar_normed, 0 * tar_normed[:, -1:]], 1)
+    losses['value'] = sg(weight[:, :-1]) * (
+    value.loss(sg(tar_padded)) +
+    slowreg * value.loss(sg(slowvalue.pred())))[:, :-1]  # we extract the value loss here and store it
+
+    ret_normed = (ret - roffset) / rscale
+    metrics['adv'] = adv.mean()
+    metrics['adv_std'] = adv.std()
+    metrics['adv_mag'] = jnp.abs(adv).mean()
+    metrics['rew'] = rew.mean()
+    metrics["intrinsic_reward"] = intrinsic_reward.mean() if intrinsic_reward is not None else 0
+    metrics["extrinsic_reward"] = extrinsic_rew.mean() if intrinsic_reward is not None else rew.mean()
+    metrics['con'] = con.mean()
+    metrics['ret'] = ret_normed.mean()
+    metrics['val'] = val.mean()
+    metrics['val_loss_prio'] = sg(losses['value']).copy()
+    metrics["ret_prio"] = ret_normed.copy()
+    metrics['tar'] = tar_normed.mean()
+    metrics['weight'] = weight.mean()
+    metrics['slowval'] = slowval.mean()
+    metrics['ret_min'] = ret_normed.min()
+    metrics['ret_max'] = ret_normed.max()
+    metrics['ret_rate'] = (jnp.abs(ret_normed) >= 1.0).mean()
+    for k in act:
+        metrics[f'ent/{k}'] = ents[k].mean()
     if hasattr(policy[k], 'minent'):
-      lo, hi = policy[k].minent, policy[k].maxent
-      metrics[f'rand/{k}'] = (ents[k].mean() - lo) / (hi - lo)
+        lo, hi = policy[k].minent, policy[k].maxent
+    metrics[f'rand/{k}'] = (ents[k].mean() - lo) / (hi - lo)
 
-  outs = {}
-  outs['ret'] = ret
-  return losses, outs, metrics
+    outs = {}
+    outs['ret'] = ret
+    return losses, outs, metrics
+
 
 
 def repl_loss(

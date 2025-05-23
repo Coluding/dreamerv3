@@ -6,8 +6,9 @@ import multiprocessing
 
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
-DEFAULT_DATASETS = {"atari100k"}
-ATARI_TASKS = {"atari100k_battle_zone", "atari100k_krull"}
+DEFAULT_DATASETS = {"dmc_vision"} # {"atari100k"}
+# ATARI_TASKS = {"atari100k_battle_zone", "atari100k_krull"}
+DMC_TASKS = {"dmc_reacher_hard", "dmc_cup_catch"}
 
 
 def run_experiment(
@@ -17,7 +18,7 @@ def run_experiment(
         num_seeds: int = 1,
         results_csv_path: str = RESULTS_CSV_PATH,
         datasets: Iterable = DEFAULT_DATASETS,
-        tasks: Iterable = ATARI_TASKS,
+        tasks: Iterable = DMC_TASKS,
     ) -> None:
     """
     Run an experiment.

@@ -4,6 +4,9 @@ import os
 import elements
 import embodied
 import numpy as np
+if 'MUJOCO_GL' not in os.environ:
+  os.environ['MUJOCO_GL'] = 'egl'
+os.environ['EGL_DEVICE_ID'] = '0'
 from dm_control import manipulation
 from dm_control import suite
 from dm_control.locomotion.examples import basic_rodent_2020
@@ -22,6 +25,7 @@ class DMC(embodied.Env):
       self, env, repeat=1, size=(64, 64), proprio=True, image=True, camera=-1):
     if 'MUJOCO_GL' not in os.environ:
       os.environ['MUJOCO_GL'] = 'egl'
+    os.environ['EGL_DEVICE_ID'] = '0'
     if isinstance(env, str):
       domain, task = env.split('_', 1)
       if camera == -1:

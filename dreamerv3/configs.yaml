@@ -7,7 +7,7 @@ defaults:
   task: dummy_disc
   seed: 0
   script: train
-  batch_size: 16
+  batch_size: 6
   batch_length: 64
   report_length: 32
   consec_train: 1
@@ -118,7 +118,7 @@ defaults:
     repval_grad: True
     report: True
     report_gradnorms: False
-    use_intrinsic: False
+    use_intrinsic: True
     intrinsic:
       ensemble_size: 5
       expl_opt: {lr: 1e-4, eps: 1e-5, beta1: 0.9, beta2: 0.999, momentum: True, wd: 0.0, schedule: const, warmup: 0}
@@ -127,7 +127,6 @@ defaults:
       disag_target: [stoch]
       model_size: 1 #TODO need to adjust the decoder size if model_size != 1
       learn_strategy: "joint_mlp" #ema, joint_wm, perturbed_starts, joint_mlp
-      ema_decay: 0.25 # rate for SlowModel
       update_every: 1
       exploration_type: "reward_variance" #state_disagreement # reward_variance
       reward_scale: 1.0
@@ -135,6 +134,11 @@ defaults:
       imag_horizon: 15
       reward_type: disagreement # prediction_error, disagreement, max_disagreement
       intrinsic_reward_lambda: 1.0
+      scheduling_strategy: 'slope_ema' # exp_decay, fixed
+      ema_decay: 0.85
+      ema_storage_size: 5000
+      max_steps: -1
+      intrinsic_lambda_fixed: 0.5
 
 size1m: &size1m
   .*\.rssm: {deter: 512, hidden: 64, classes: 4}
@@ -187,7 +191,7 @@ procgen:
   run: {steps: 1.1e8, train_ratio: 64}
 
 atari100k:
-  task: atari100k_pong
+  task: atari100k_krull
   run: {steps: 4e5, envs: 1, train_ratio: 256}
 
 crafter:

@@ -76,6 +76,8 @@ class Agent(embodied.jax.Agent):
     self.retnorm = embodied.jax.Normalize(**config.retnorm, name='retnorm')
     self.valnorm = embodied.jax.Normalize(**config.valnorm, name='valnorm')
     self.advnorm = embodied.jax.Normalize(**config.advnorm, name='advnorm')
+    self.extr_norm = embodied.jax.Normalize(**config.retnorm, name='extrnorm')
+    self.intr_norm = embodied.jax.Normalize(**config.retnorm, name='intrnorm')
 
     scales = self.config.loss_scales.copy()
     rec = scales.pop('rec')
@@ -100,10 +102,10 @@ class Agent(embodied.jax.Agent):
       self.intrinsic_reward_lambda = nj.Variable(lambda: jnp.array(1, f32), name="intrinsic_reward_lambda")
       self.intrinsic_step_counter = nj.Variable(lambda: jnp.array(0, jnp.int32), name='step_counter')
       self.extrinsic_ema = nj.Variable(lambda: jnp.array(0, f32), name="extrinsic_ema")
-      self.decay_rate = nj.Variable(lambda: jnp.array(0.9, f32), name="intrinsic_decay_rate")
-      self.extrinsic_reward_ema_storage = nj.Variable(lambda: jnp.zeros(10_000, f32), name="extrinsic_reward_ema_storage")
-      self.total_steps = nj.Variable(lambda: jnp.array(self.num_total_steps, jnp.int32), name="total_steps")
-
+      self.decay_rate = nj.Variable(lambda: jnp.array(self.config.intrinsic['ema_decay'], f32), name="intrinsic_decay_rate")
+      self.extrinsic_reward_ema_storage = nj.Variable(lambda: jnp.zeros(self.config.intrinsic['ema_storage_size'], f32), name="extrinsic_reward_ema_storage")
+      self.extrinsic_reward_ema_storage_normed = nj.Variable(lambda: jnp.zeros(self.config.intrinsic['ema_storage_size'], f32), name="extrinsic_reward_ema_storage_normed")
+      self.total_steps = nj.Variable(lambda: jnp.array(self.config.intrinsic['max_steps'] if self.config.intrinsic['max_steps'] > -1 else self.num_total_steps, jnp.int32), name="total_steps")
 
       self.ens_controller = EnsembleController(
         ensembles=self.ensemble if self.config.intrinsic["learn_strategy"] != "perturbed_starts" else [self.dyn],
@@ -320,11 +322,6 @@ class Agent(embodied.jax.Agent):
     losses['rew'] = reward_model(inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
 
-    if self.config.use_intrinsic:
-      count = self.intrinsic_step_counter.read()
-      self.intrinsic_step_counter.write(count + 1)
-      metrics["env_step"] = count
-
     if self.config.contdisc:
       con *= 1 - 1 / self.config.horizon
 
@@ -361,30 +358,10 @@ class Agent(embodied.jax.Agent):
     assert all(x.shape[:2] == (B * K, H + 1) for x in jax.tree.leaves(imgact))
     inp = self.feat2tensor(imgfeat)
     rew = self.rew(inp, 2).pred()
-    rew_mean = rew.mean()
-    if self.config.use_intrinsic:
-      rew_ema = self.extrinsic_ema.read()
-      decay = self.decay_rate.read()
-      new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
-      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
-      self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
-      metrics["extrinsic_reward_ema"] = new_ema
-      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
-      min_val = jnp.min(rew_ema_storage)
-      max_val = jnp.max(rew_ema_storage)
-      scaled_storage = (rew_ema_storage - min_val) / (max_val - min_val + 1e-8)
-      self.extrinsic_reward_ema_storage.write(scaled_storage)
-      self.extrinsic_ema.write(new_ema)
-      if True:
-        ema_storage = self.extrinsic_reward_ema_storage.read()
-        slope = ema_storage[-1] - ema_storage[0]
-        metrics["slope"] = slope
-        intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 0.5))
-        self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
-      else:
-        intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
-        decay = jnp.exp(-2.5 * (step / total_steps))
-        self.intrinsic_reward_lambda.write(decay)
+    
+    intrinsic_mets = self._intrinsic_reward_lambda_step(rew)
+    metrics.update(intrinsic_mets)
+
     los, imgloss_out, mets = imag_loss(
         imgact,
         rew,
@@ -392,7 +369,7 @@ class Agent(embodied.jax.Agent):
         self.pol(inp, 2),
         self.val(inp, 2),
         self.slowval(inp, 2),
-        self.retnorm, self.valnorm, self.advnorm,
+        self.retnorm, self.valnorm, self.advnorm, self.intr_norm, self.extr_norm,
         update=training,
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
@@ -706,29 +683,56 @@ class Agent(embodied.jax.Agent):
     
     return intrinsic_reward
 
-  def _intrinsic_reward_lambda_step(self,):
+  def _intrinsic_reward_lambda_step(self, rew,):
+    metrics = {}
 
-      if False:
-          ema_storage = self.extrinsic_reward_ema_storage.read()
-          slope = jnp.polyfit(jnp.arange(len(ema_storage)).astype(f32),
-                              ema_storage, deg = 1)[0]
-          intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 0.25))
-          self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
-          return intrinsic_reward_lambda
+    count = self.intrinsic_step_counter.read()
+    self.intrinsic_step_counter.write(count + 1)
+    metrics["env_step"] = count
 
-
-      step = self.intrinsic_step_counter.read()
-      total_steps = self.total_steps.read()
+    if self.config.intrinsic['scheduling_strategy'] == "slope_ema":
+      rew_mean = rew.mean()
+      # --- Reward ema ---
+      rew_ema = self.extrinsic_ema.read()
+      decay = self.decay_rate.read()
+      new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
+      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+      # Remove the oldest value from the storage and add the new one
+      self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[1:], jnp.expand_dims(new_ema, 0))))
+      self.extrinsic_ema.write(new_ema)
+      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+      # Min max scaling across the values in the storage
+      min_val = jnp.min(rew_ema_storage)
+      max_val = jnp.max(rew_ema_storage)
+      scaled_storage = (rew_ema_storage - min_val) / (max_val - min_val + 1e-8)
+      self.extrinsic_reward_ema_storage_normed.write(scaled_storage)
+      ema_storage = self.extrinsic_reward_ema_storage_normed.read()
+      # Compute the slope of the EMA storage (has to be -1 < slope < 1)
+      slope = ema_storage[-1] - ema_storage[0]
+      intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 3))
+      self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
+      metrics['slope'] = slope
+      metrics ['rew_ema'] = new_ema
+      metrics ['min_ema'] = min_val
+      metrics ['max_ema'] = max_val
+    elif self.config.intrinsic['scheduling_strategy'] == "exp_decay":
       intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
-      decay = jnp.exp(-3.5*(step / total_steps))
-
+      total_steps = self.total_steps.read()
+      decay = jnp.exp(-2.5 * (count / total_steps))
       self.intrinsic_reward_lambda.write(decay)
+    elif self.config.intrinsic['scheduling_strategy'] == "fixed":
+      intrinsic_reward_lambda = self.config.intrinsic['intrinsic_lambda_fixed']
+      self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
+    else:
+      raise NotImplementedError(self.config.intrinsic['scheduling_strategy'])
 
+    metrics ['intrinsic_reward_lambda'] = intrinsic_reward_lambda
+    return metrics
 
 def imag_loss(
     act, rew, con,
     policy, value, slowvalue,
-    retnorm, valnorm, advnorm,
+    retnorm, valnorm, advnorm, intr_norm, extr_norm,
     update,
     contdisc=True,
     slowtar=True,
@@ -742,10 +746,9 @@ def imag_loss(
   losses = {}
   metrics = {}
 
-  if intrinsic_reward_lambda is not None:
-    intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
 
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
+    intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
     BT = rew.shape[0]
     intrinsic_reward_expanded_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
     if intrinsic_reward_expanded_entry.shape != rew.shape:
@@ -761,8 +764,24 @@ def imag_loss(
   weight = jnp.cumprod(disc * con, 1) / disc
   last = jnp.zeros_like(con)
   term = 1 - con # rew += intrinsic_reward
-  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam) # target lambda return
 
+  if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
+    intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
+    BT = rew.shape[0]
+    intrinsic_reward_expanded_entry = jnp.concatenate((intrinsic_reward, jnp.zeros((BT, 1))), axis=-1)
+    if intrinsic_reward_expanded_entry.shape != rew.shape:
+        intrinsic_reward_expanded_entry = jnp.concatenate((jnp.zeros((BT, 1)), intrinsic_reward_expanded_entry), axis=-1)
+    extrinsic_rew = rew.copy()
+    
+    #ret = (1 - intrinsic_reward_lambda) * extrinsic_ret + intrinsic_ret * intrinsic_reward_lambda
+    intr_offset, intr_rscale = intr_norm(intrinsic_reward_expanded_entry, update)
+    extr_offset, extr_rscale = extr_norm(extrinsic_rew, update)
+    intr_rew_norm = (intrinsic_reward_expanded_entry - intr_offset) / intr_rscale
+    extr_rew_norm = (extrinsic_rew - extr_offset) / extr_rscale
+    rew = (1 - intrinsic_reward_lambda) * extr_rew_norm + intrinsic_reward_lambda * intr_rew_norm
+
+  ret = lambda_return(last, term, rew, tarval, tarval, disc, lam)
+  
   roffset, rscale = retnorm(ret, update)
   adv = (ret - tarval[:, :-1]) / rscale # advantage as difference between return and value (normalized) ignoring the last step (because we have no return for the last step)
   aoffset, ascale = advnorm(adv, update)
@@ -789,6 +808,8 @@ def imag_loss(
   metrics['rew'] = rew.mean()
   metrics["intrinsic_reward"] = intrinsic_reward.mean() if intrinsic_reward is not None else 0
   metrics["extrinsic_reward"] = extrinsic_rew.mean() if intrinsic_reward is not None else rew.mean()
+  metrics["intrinsic_reward_norm"] = intr_rew_norm.mean() if intrinsic_reward is not None else 0
+  metrics["extrinsic_reward_norm"] = extr_rew_norm.mean() if intrinsic_reward is not None else ret_normed.mean()
   metrics['con'] = con.mean()
   metrics['ret'] = ret_normed.mean()
   metrics['val'] = val.mean()
@@ -800,6 +821,10 @@ def imag_loss(
   metrics['ret_min'] = ret_normed.min()
   metrics['ret_max'] = ret_normed.max()
   metrics['ret_rate'] = (jnp.abs(ret_normed) >= 1.0).mean()
+  metrics['extr_scale'] = extr_rscale if intrinsic_reward is not None else 0
+  metrics['intr_scale'] = intr_rscale if intrinsic_reward is not None else 0
+  metrics['extr_offset'] = extr_offset if intrinsic_reward is not None else 0
+  metrics['intr_offset'] = intr_offset if intrinsic_reward is not None else 0
   for k in act:
     metrics[f'ent/{k}'] = ents[k].mean()
     if hasattr(policy[k], 'minent'):
@@ -879,3 +904,4 @@ def lambda_return(last, term, rew, val, boot, disc, lam):
   for t in reversed(range(live.shape[1])):
     rets.append(interm[:, t] + live[:, t] * cont[:, t] * rets[-1])
   return jnp.stack(list(reversed(rets))[:-1], 1)
+

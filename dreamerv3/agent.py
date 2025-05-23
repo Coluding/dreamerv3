@@ -320,9 +320,10 @@ class Agent(embodied.jax.Agent):
     losses['rew'] = reward_model(inp, 2).loss(obs['reward'])
     con = f32(~obs['is_terminal'])
 
-    count = self.intrinsic_step_counter.read()
-    self.intrinsic_step_counter.write(count + 1)
-    metrics["env_step"] = count
+    if self.config.use_intrinsic:
+      count = self.intrinsic_step_counter.read()
+      self.intrinsic_step_counter.write(count + 1)
+      metrics["env_step"] = count
 
     if self.config.contdisc:
       con *= 1 - 1 / self.config.horizon
@@ -361,18 +362,29 @@ class Agent(embodied.jax.Agent):
     inp = self.feat2tensor(imgfeat)
     rew = self.rew(inp, 2).pred()
     rew_mean = rew.mean()
-    rew_ema = self.extrinsic_ema.read()
-    decay = self.decay_rate.read()
-    new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
-    metrics["extrinsic_reward_ema"] = new_ema
-    rew_ema_storage = self.extrinsic_reward_ema_storage.read()
-    self.extrinsic_ema.write(new_ema)
-    self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
-    step = self.intrinsic_step_counter.read()
-    total_steps = self.total_steps.read()
-    intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
-    decay = jnp.exp(-2.5 * (step / total_steps))
-    self.intrinsic_reward_lambda.write(decay)
+    if self.config.use_intrinsic:
+      rew_ema = self.extrinsic_ema.read()
+      decay = self.decay_rate.read()
+      new_ema = jnp.array(rew_ema * decay + (1 - decay) * rew_mean, f32)
+      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+      self.extrinsic_reward_ema_storage.write(jnp.concatenate((rew_ema_storage[:-1], jnp.expand_dims(new_ema, 0))))
+      metrics["extrinsic_reward_ema"] = new_ema
+      rew_ema_storage = self.extrinsic_reward_ema_storage.read()
+      min_val = jnp.min(rew_ema_storage)
+      max_val = jnp.max(rew_ema_storage)
+      scaled_storage = (rew_ema_storage - min_val) / (max_val - min_val + 1e-8)
+      self.extrinsic_reward_ema_storage.write(scaled_storage)
+      self.extrinsic_ema.write(new_ema)
+      if True:
+        ema_storage = self.extrinsic_reward_ema_storage.read()
+        slope = ema_storage[-1] - ema_storage[0]
+        metrics["slope"] = slope
+        intrinsic_reward_lambda = 1 / (1 + jnp.exp(slope * 0.5))
+        self.intrinsic_reward_lambda.write(intrinsic_reward_lambda)
+      else:
+        intrinsic_reward_lambda = self.intrinsic_reward_lambda.read()
+        decay = jnp.exp(-2.5 * (step / total_steps))
+        self.intrinsic_reward_lambda.write(decay)
     los, imgloss_out, mets = imag_loss(
         imgact,
         rew,
@@ -385,7 +397,7 @@ class Agent(embodied.jax.Agent):
         contdisc=self.config.contdisc,
         horizon=self.config.horizon,
         intrinsic_reward=intrinsic_reward if self.config.use_intrinsic else None,
-        intrinsic_reward_lambda=self.intrinsic_reward_lambda.read(),
+        intrinsic_reward_lambda=self.intrinsic_reward_lambda.read() if self.config.use_intrinsic else None,
         **self.config.imag_loss)
     losses.update({k: v.mean(1).reshape((B, K)) for k, v in los.items()})
     metrics.update(mets)
@@ -730,7 +742,8 @@ def imag_loss(
   losses = {}
   metrics = {}
 
-  intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
+  if intrinsic_reward_lambda is not None:
+    intrinsic_reward_lambda =  jnp.clip(intrinsic_reward_lambda,  max=1, min=0.1) # max done in jax
 
   if intrinsic_reward is not None: #TODO get a feeling for the intrinsic reward scale
     BT = rew.shape[0]

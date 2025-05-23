@@ -207,7 +207,7 @@ dmc_proprio:
 dmc_vision:
   task: dmc_walker_walk
   env.dmc.proprio: False
-  run: {steps: 1.1e6, train_ratio: 256}
+  run: {steps: 1e6, train_ratio: 256}
 
 bsuite:
   task: bsuite_mnist/0

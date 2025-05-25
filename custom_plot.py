@@ -1,6 +1,8 @@
 import concurrent.futures
+import copy
 import functools
 import json
+import os
 import re
 import warnings
 
@@ -11,7 +13,6 @@ import numpy as np
 import pandas as pd
 import ruamel.yaml as yaml
 import tqdm
-import elements 
 
 
 COLORS = [
@@ -22,84 +23,173 @@ COLORS = [
 
 
 def load_config(config_path):
-    """Load and parse a config.yaml file."""
-    try:
-        with open(config_path, 'r') as f:
-            config = yaml.YAML(typ='safe').load(f)
-        return config
-    except Exception as e:
-        elements.print(f"Error loading config {config_path}: {e}", color='red')
-        return None
+  """Load and parse a config.yaml file."""
+  try:
+      with open(config_path, 'r') as f:
+          config = yaml.YAML(typ='safe').load(f)
+      return config
+  except Exception as e:
+      elements.print(f"Error loading config {config_path}: {e}", color='red')
+      return None
 
 def get_run_metadata(run_dir):
-    """Extract metadata from a run directory."""
-    config_path = run_dir / 'config.yaml'
-    config = load_config(config_path)
-    if not config:
-        return None
-    
-    # Extract method from directory structure
-    method_parts = str(run_dir).split('/')
-    for part in method_parts:
-        if part in ['default', 'latent_reward_disagreement', 'optimized_replay_buffer']:
-            method = part
-            break
-    else:
-        method = "unknown"
-    
-    # Extract game name from config
-    if 'task' in config:
-        # For atari100k_battle_zone format, extract just the game part
-        if 'atari100k_' in config['task']:
-            game = config['task'].split('atari100k_')[1]
-        else:
-            game = config['task']
-    
-    # Extract seed and other relevant parameters
-    metadata = {
-        'method': method,
-        'game': game,
-        'seed': config.get('seed', 'unknown'),
-        'config': config
-    }
-    
-    # Add method-specific grouping parameters
-    if 'latent_reward_disagreement' in method:
-        intrinsic = config.get('agent', {}).get('intrinsic', {})
-        metadata['intrinsic_reward_lambda'] = intrinsic.get('intrinsic_reward_lambda', 0)
-        metadata['learn_strategy'] = intrinsic.get('learn_strategy', 'unknown')
-    
-    return metadata
+  """Extract metadata from a run directory."""
+  config_path = run_dir / 'config.yaml'
+  config = load_config(config_path)
+  if not config:
+      return None
+  
+  # Extract method from directory structure
+  method_parts = str(run_dir).split('/')
+  for part in method_parts:
+      if part in ['default', 'latent_reward_disagreement', 'optimized_replay_buffer']:
+          method = part
+          break
+  else:
+      method = "unknown"
+  
+  # Extract game name from config
+  if 'task' in config:
+      # For atari100k_battle_zone format, extract just the game part
+      if 'atari100k_' in config['task']:
+          game = config['task'].split('atari100k_')[1]
+      else:
+          game = config['task']
+  
+  # Extract seed and other relevant parameters
+  metadata = {
+      'method': method,
+      'game': game,
+      'seed': config.get('seed', 'unknown'),
+      'config': config
+  }
+  
+  # Add method-specific grouping parameters
+  if 'latent_reward_disagreement' in method:
+      intrinsic = config.get('agent', {}).get('intrinsic', {})
+      metadata['intrinsic_reward_lambda'] = intrinsic.get('intrinsic_reward_lambda', 0)
+      metadata['learn_strategy'] = intrinsic.get('learn_strategy', 'unknown')
+      
+      # Check for scheduling strategy
+      metadata['scheduling_strategy'] = intrinsic.get('scheduling_strategy', 'none')
+  
+  return metadata
 
+def extract_nested_or_flat(row, key):
+    """Try flat key first, then nested."""
+    if key in row:
+        return row[key]
+    keys = key.split('/')
+    d = row
+    for k in keys:
+        if not isinstance(d, dict) or k not in d:
+            return None
+        d = d[k]
+    return d
 
 def load_run(filename, xkeys, ykeys, ythres=None):
-  try:
     try:
-      df = pd.read_json(filename, lines=True)
-    except ValueError:
-      print('Falling back to robust JSONL reader.')
-      records = []
-      for line in filename.read_text().split('\n')[:-1]:
         try:
-          records.append(json.loads(line))
-        except json.decoder.JSONDecodeError:
-          print(f'Skipping invalid JSONL line: {line}')
-      df = pd.DataFrame(records)
-    assert len(df), 'no timesteps in run'
-    xkey = [k for k in xkeys if k in df]
-    ykey = [k for k in ykeys if k in df]
-    assert xkey, (filename, df.columns, xkeys)
-    assert ykey, (filename, df.columns, ykeys)
-    xs = df[xkey[0]].to_list()
-    ys = df[ykey[0]].to_list()
-    assert isinstance(xs, list), type(xs)
-    assert isinstance(ys, list), type(ys)
-    if ythres:
-      ys = [1 if y > ythres else 0 for y in ys]
-    return xs, ys
-  except Exception as e:
-    elements.print(f'Exception loading {filename}: {e}', color='red')
-    return None
+            df = pd.read_json(filename, lines=True)
+        except ValueError:
+            print('Falling back to robust JSONL reader.')
+            records = []
+            for line in filename.read_text().split('\n')[:-1]:
+                try:
+                    records.append(json.loads(line))
+                except json.decoder.JSONDecodeError:
+                    print(f'Skipping invalid JSONL line: {line}')
+            df = pd.DataFrame(records)
+
+        assert len(df), 'no timesteps in run'
+
+        # Select x and y keys
+        xkey = next((k for k in xkeys if k in df.columns), None)
+        ykey = ykeys[0] 
+
+        if xkey:
+            xs = df[xkey].tolist()
+        else:
+            raise ValueError(f"No matching xkey in DataFrame columns: {df.columns}")
+
+        ys = [extract_nested_or_flat(row, ykey) for _, row in df.iterrows()]
+
+        # Clean or threshold
+        if ythres is not None:
+            ys = [1 if y is not None and y > ythres else 0 for y in ys]
+
+        return xs, ys
+
+    except Exception as e:
+        elements.print(f'Exception loading {filename}: {e}', color='red')
+        return None
+
+def load_metrics_data(filename, key='train/loss/rew'):
+    """Load specific metric data from a metrics.jsonl file."""
+    try:
+        print(f"Loading metrics from {filename}, looking for key '{key}'")
+        
+        # Read the file line by line
+        data = []
+        with open(filename, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    
+                    # Check if the key exists, using nested path notation if needed
+                    value = extract_nested_or_flat(record, key)
+                    
+                    if 'step' in record and value is not None:
+                        data.append({
+                            'step': record['step'],
+                            'value': value
+                        })
+                except json.JSONDecodeError:
+                    continue
+        
+        # If no data found with the specified key, try to find alternative keys
+        if not data:
+            print(f"No data found with key '{key}' in {filename}")
+            with open(filename, 'r') as f:
+                first_line = f.readline().strip()
+                if first_line:
+                    try:
+                        sample = json.loads(first_line)
+                        # Print all available keys for debugging
+                        print(f"Available keys: {list(sample.keys())}")
+                        # Look for loss-related keys
+                        loss_keys = [k for k in sample.keys() if 'loss' in k.lower()]
+                        if loss_keys:
+                            print(f"Found loss-related keys: {loss_keys}")
+                            # Try the first loss key
+                            return load_metrics_data(filename, loss_keys[0])
+                    except:
+                        pass
+            return None
+            
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+        
+        # Extract step and the requested metric
+        xs = df['step'].tolist()
+        ys = df['value'].tolist()
+        
+        # Print sample of data for debugging
+        print(f"Loaded {len(xs)} data points from {filename}")
+        if xs:
+            print(f"Sample data: {list(zip(xs[:3], ys[:3]))}")
+        
+        return xs, ys
+    except FileNotFoundError:
+        print(f"File not found: {filename}")
+        return None
+    except Exception as e:
+        print(f'Exception loading {filename}: {e}')
+        return None
+
 
 
 def load_runs(args):
@@ -214,178 +304,187 @@ def comp_count(name, df):
 
 
 def comp_stats(df, args):
-    print('Computing stats...')
+  print('Computing stats...')
 
-    # Derive baselines from default_* runs
-    default_df = df[df['method'].str.startswith('default')]
-    self_baseline = {}
-    
-    # Only compute baselines if we have default runs
-    if not default_df.empty:
-        for task in df['task'].unique():
-            task_df = default_df[default_df['task'] == task]
-            if not task_df.empty:
-                all_ys = np.concatenate(task_df['ys'].tolist())
-                valid_ys = all_ys[np.isfinite(all_ys)]
-                if len(valid_ys) > 0:
-                    self_baseline[task] = (np.min(valid_ys), np.max(valid_ys))
-                else:
-                    # Use 0-1 range as fallback
-                    self_baseline[task] = (0, 1)
-            else:
-                # Use 0-1 range as fallback
-                self_baseline[task] = (0, 1)
+  # Derive baselines from default_* runs
+  default_df = df[df['method'].str.startswith('default')]
+  self_baseline = {}
+  
+  # Only compute baselines if we have default runs
+  if not default_df.empty:
+      for task in df['task'].unique():
+          task_df = default_df[default_df['task'] == task]
+          if not task_df.empty:
+              all_ys = np.concatenate(task_df['ys'].tolist())
+              valid_ys = all_ys[np.isfinite(all_ys)]
+              if len(valid_ys) > 0:
+                  self_baseline[task] = (np.min(valid_ys), np.max(valid_ys))
+              else:
+                  # Use 0-1 range as fallback
+                  self_baseline[task] = (0, 1)
+          else:
+              # Use 0-1 range as fallback
+              self_baseline[task] = (0, 1)
 
-    stats = []
-    choices = list(args.stats)
-    choices = [x for x in choices if x != 'none']
-    if not choices:
-        return None
+  stats = []
+  choices = list(args.stats)
+  choices = [x for x in choices if x != 'none']
+  if not choices:
+      return None
 
-    if 'auto' in choices:
-        choices.remove('auto')
-        choices += ['mean', 'median']
+  ax0 = lambda fn: functools.partial(fn, axis=0)
+  for stat in choices:
+      if stat == 'runs':
+          x = comp_count('Runs', df)
+      elif stat == 'mean':
+          x = comp_stat('Mean', df, ax0(np.mean))
+      elif stat == 'median':
+          x = comp_stat('Median', df, ax0(np.median))
+      elif stat == 'self_mean':
+          # Only compute self_mean if we have baselines
+          if self_baseline:
+              x = comp_stat('Self Mean', df, ax0(nanmean), self_baseline)
+          else:
+              print("Skipping 'self_mean' stat - no baseline data available")
+              continue
+      elif stat == 'self_median':
+          # Only compute self_median if we have baselines
+          if self_baseline:
+              x = comp_stat('Self Median', df, ax0(nanmedian), self_baseline)
+          else:
+              print("Skipping 'self_median' stat - no baseline data available")
+              continue
+      else:
+          print(f"Stat '{stat}' is not supported without baselines.yaml.")
+          continue
+      stats.append(x)
 
-    ax0 = lambda fn: functools.partial(fn, axis=0)
-    for stat in choices:
-        if stat == 'runs':
-            x = comp_count('Runs', df)
-        elif stat == 'mean':
-            x = comp_stat('Mean', df, ax0(np.mean))
-        elif stat == 'median':
-            x = comp_stat('Median', df, ax0(np.median))
-        elif stat == 'self_mean':
-            # Only compute self_mean if we have baselines
-            if self_baseline:
-                x = comp_stat('Self Mean', df, ax0(nanmean), self_baseline)
-            else:
-                print("Skipping 'self_mean' stat - no baseline data available")
-                continue
-        elif stat == 'self_median':
-            # Only compute self_median if we have baselines
-            if self_baseline:
-                x = comp_stat('Self Median', df, ax0(nanmedian), self_baseline)
-            else:
-                print("Skipping 'self_median' stat - no baseline data available")
-                continue
-        else:
-            print(f"Stat '{stat}' is not supported without baselines.yaml.")
-            continue
-        stats.append(x)
-
-    return pd.concat(stats) if stats else None
+  return pd.concat(stats) if stats else None
 
 
 
 def plot_runs(df, stats, args, title=None):
-    print('Plotting...')
-    tasks = natsort(df.task.unique())
-    snames = [] if stats is None else stats.name.unique()
-    methods = natsort(df.method.unique())
-    total = len(tasks) + len(snames)
-    cols = args.cols or (4 + (total > 24) + (total > 35) + (total > 48))
-    
-    bigger_size = (6, 5)  
-    fig, axes = plots(total, cols, bigger_size)
+  print('Plotting...')
+  tasks = natsort(df.task.unique())
+  snames = [] if stats is None else stats.name.unique()
+  methods = natsort(df.method.unique())
+  total = len(tasks) + len(snames)
+  cols = args.cols or (4 + (total > 24) + (total > 35) + (total > 48))
+  
+  bigger_size = (6, 5)  
+  fig, axes = plots(total, cols, bigger_size)
 
-    # For game-specific plots, show individual seeds with different colors
-    for task, ax in zip(tasks, axes[:len(tasks)]):
-        style(ax, xticks=args.xticks, yticks=args.yticks)
-        title_text = title or task.replace('_', ' ').replace(':', ' ').title()
-        ax.set_title(title_text, fontsize=14)  # Larger title font
-        args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
-        args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
-        task_df = df[df['task'] == task]
-        
-        # Plot each method and seed combination separately
-        color_idx = 0 
-        for method in methods:
-            method_df = task_df[task_df['method'] == method]
-            
-            if method_df.empty:
-                continue
-                
-            # Plot each seed with its own color
-            for seed, seed_data in method_df.groupby('seed'):
-                xs = seed_data['xs'].iloc[0]
-                ys = seed_data['ys'].iloc[0]
-                label = f"{method} (seed {seed})"
-                curve(ax, xs, ys, None, None, label, color_idx, linestyle='-')
-                color_idx += 1 
+  # For game-specific plots, show individual seeds with different colors
+  for task, ax in zip(tasks, axes[:len(tasks)]):
+      style(ax, xticks=args.xticks, yticks=args.yticks)
+      title_text = task.replace('_', ' ').replace(':', ' ').title()
+      ax.set_title(title_text, fontsize=14)  # Larger title font
+      args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
+      args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
+      task_df = df[df['task'] == task]
+      
+      # Group by method first to ensure consistent colors per method
+      method_color_map = {}
+      for i, method in enumerate(methods):
+          method_color_map[method] = i
+      
+      # Plot each method and seed combination separately
+      for method in methods:
+          method_df = task_df[task_df['method'] == method]
+          
+          if method_df.empty:
+              continue
+              
+          # Plot each seed with its own line style but same method color
+          color_idx = method_color_map[method]
+          for i, (seed, seed_data) in enumerate(method_df.groupby('seed')):
+              xs = seed_data['xs'].iloc[0]
+              ys = seed_data['ys'].iloc[0]
+              label = f"{method} (seed {seed})"
+              
+              # Use different line styles for different seeds
+              linestyle = ['-', '--', ':', '-.'][i % 4]
+              curve(ax, xs, ys, None, None, label, color_idx, linestyle=linestyle)
+      
+      # Add legend to each individual plot
+      if len(ax.get_legend_handles_labels()[0]) > 0:
+          ax.legend(fontsize=8, loc='best', framealpha=0.7)
 
-    # For stat plots (Mean, Self Mean), add variance shading
-    if stats is not None:
-        try:
-            # First, prepare data for variance calculation
-            mean_data = {}
-            for task in tasks:
-                task_df = df[df['task'] == task]
-                for method in methods:
-                    method_df = task_df[task_df['method'] == method]
-                    if method_df.empty:
-                        continue
-                    
-                    # Stack all seed data for this method
-                    xs = method_df['xs'].iloc[0]  # Assume all xs are aligned
-                    all_ys = np.stack(method_df['ys'].values)
-                    
-                    # Calculate mean and std
-                    mean_ys = nanmean(all_ys, axis=0)
-                    std_ys = nanstd(all_ys, axis=0)
-                    
-                    # Store for later use
-                    if (task, method) not in mean_data:
-                        mean_data[(task, method)] = (xs, mean_ys, mean_ys - std_ys, mean_ys + std_ys)
-            
-            # Now plot the stat plots with variance
-            grouped_stats = stats.groupby(['name', 'method'])
-            for sname, ax in zip(snames, axes[len(tasks):]):
-                style(ax, xticks=args.xticks, yticks=args.yticks, darker=True)
-                ax.set_title(sname, fontsize=14)  # Larger title font
-                args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
-                
-                for i, method in enumerate(methods):
-                    try:
-                        sub = grouped_stats.get_group((sname, method))
-                        xs = sub['xs'].iloc[0]
-                        ys = sub['ys'].iloc[0]
-                        
-                        # For Mean plot, add variance shading
-                        if sname == 'Mean':
-                            # Aggregate variance across tasks
-                            all_lo = []
-                            all_hi = []
-                            
-                            for task in tasks:
-                                if (task, method) in mean_data:
-                                    _, _, lo, hi = mean_data[(task, method)]
-                                    all_lo.append(lo)
-                                    all_hi.append(hi)
-                            
-                            if all_lo and all_hi:
-                                lo = nanmean(np.stack(all_lo), axis=0)
-                                hi = nanmean(np.stack(all_hi), axis=0)
-                                curve(ax, xs, ys, lo, hi, method, i)
-                            else:
-                                curve(ax, xs, ys, None, None, method, i)
-                        else:
-                            # For other stats, no variance shading
-                            curve(ax, xs, ys, None, None, method, i)
-                    except (KeyError, ValueError) as e:
-                        print(f"Error plotting stats for method '{method}' on '{sname}': {e}")
-                        continue
-        except Exception as e:
-            print(f"Error plotting stats: {e}")
+  # For stat plots (Mean, Self Mean), add variance shading
+  if stats is not None:
+      # First, prepare data for variance calculation
+      mean_data = {}
+      for task in tasks:
+          task_df = df[df['task'] == task]
+          for method in methods:
+              method_df = task_df[task_df['method'] == method]
+              if method_df.empty:
+                  continue
+              
+              # Stack all seed data for this method
+              xs = method_df['xs'].iloc[0]  # Assume all xs are aligned
+              all_ys = np.stack(method_df['ys'].values)
+              
+              # Calculate mean and std
+              mean_ys = nanmean(all_ys, axis=0)
+              std_ys = nanstd(all_ys, axis=0)
+              
+              # Store for later use
+              if (task, method) not in mean_data:
+                  mean_data[(task, method)] = (xs, mean_ys, mean_ys - std_ys, mean_ys + std_ys)
+      
+      # Now plot the stat plots with variance
+      grouped_stats = stats.groupby(['name', 'method'])
+      for sname, ax in zip(snames, axes[len(tasks):]):
+          style(ax, xticks=args.xticks, yticks=args.yticks, darker=True)
+          ax.set_title(sname, fontsize=14)  # Larger title font
+          args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
+          
+          for i, method in enumerate(methods):
+              try:
+                  sub = grouped_stats.get_group((sname, method))
+                  xs = sub['xs'].iloc[0]
+                  ys = sub['ys'].iloc[0]
+                  
+                  # For Mean plot, add variance shading
+                  if sname == 'Mean':
+                      # Aggregate variance across tasks
+                      all_lo = []
+                      all_hi = []
+                      
+                      for task in tasks:
+                          if (task, method) in mean_data:
+                              _, _, lo, hi = mean_data[(task, method)]
+                              all_lo.append(lo)
+                              all_hi.append(hi)
+                      
+                      if all_lo and all_hi:
+                          lo = nanmean(np.stack(all_lo), axis=0)
+                          hi = nanmean(np.stack(all_hi), axis=0)
+                          # For mean plots, just show method name (aggregated over seeds)
+                          curve(ax, xs, ys, lo, hi, method, i)
+                      else:
+                          curve(ax, xs, ys, None, None, method, i)
+                  else:
+                      # For other stats, no variance shading
+                      curve(ax, xs, ys, None, None, method, i)
+              except (KeyError, ValueError) as e:
+                  print(f"Error plotting stats for method '{method}' on '{sname}': {e}")
+                  continue
+          
+          # Add legend to each stat plot
+          if len(ax.get_legend_handles_labels()[0]) > 0:
+              ax.legend(fontsize=8, loc='best', framealpha=0.7)
 
-    # Increase legend font size and spacing
-    legend(fig, adjust=True, ncol=args.legendcols or min(4, cols, len(axes)), fontsize=12)
-
-    # Create output directory
-    outdir = elements.Path(args.outdir) / title if title else elements.Path(args.outdir) / elements.Path(args.indirs[0]).stem
-    outdir.mkdir(parents=True, exist_ok=True)
-    filename = outdir / 'curves.png'
-    fig.savefig(filename, dpi=200)  # Higher DPI for better quality
-    print('Saved', filename)
+  # Save the figure
+  if title:
+      plt.tight_layout()
+      filename = f"{args.outdir}/{title}.png"
+      os.makedirs(os.path.dirname(filename), exist_ok=True)
+      plt.savefig(filename, dpi=200)
+      print(f"Saved figure to {filename}")
+  
+  plt.close(fig)
 
 
 def plots(amount, cols=4, size=(3, 3), **kwargs):
@@ -516,76 +615,128 @@ def print_summary(df):
   print('-' * 79)
 
 
-def find_and_group_runs(logdir, pattern="**/scores.jsonl"):
-    """Find all runs and group them by method, game, and relevant parameters."""
-    logdir = elements.Path(logdir)
-    all_runs = list(logdir.glob(pattern))
-    
-    grouped_runs = {}
-    for run_file in all_runs:
-        run_dir = run_file.parent
-        metadata = get_run_metadata(run_dir)
-        if not metadata:
-            continue
-        
-        # Create grouping key based on method
-        if 'latent_reward_disagreement' in metadata['method']:
-            # Include lambda in the key to keep different lambda values separate
-            group_key = (
-                metadata['method'],
-                metadata['game'],
-                metadata['intrinsic_reward_lambda'],
-                metadata['learn_strategy']
-            )
-            # Create a method name that includes the lambda value
-            method_name = f"{metadata['method']}_lambda{metadata['intrinsic_reward_lambda']}"
-        else:  # default or optimized_replay_buffer
-            group_key = (
-                metadata['method'],
-                metadata['game']
-            )
-            method_name = metadata['method']
-        
-        if group_key not in grouped_runs:
-            grouped_runs[group_key] = []
-        
-        grouped_runs[group_key].append({
-            'file': run_file,
-            'metadata': metadata,
-            'method_name': method_name
-        })
-    
-    return grouped_runs
+def find_and_group_runs(logdir, pattern="**/scores.jsonl", metrics="metrics.jsonl"):
+  """Find all runs and group them by method, game, and relevant parameters."""
+  logdir = elements.Path(logdir)
+  all_runs = list(logdir.glob(pattern))
+  
+  grouped_runs = {}
+  for run_file in all_runs:
+      run_dir = run_file.parent
+      metrics_file = run_dir / metrics
+      if not metrics_file.exists():
+          print("Could not find metrics file for run:", run_file)
+          continue
+      # Load metadata from the run directory
+      metadata = get_run_metadata(run_dir)
+      if not metadata:
+          continue
+      
+      # Create grouping key based on method
+      if 'latent_reward_disagreement' in metadata['method']:
+          # Create base group key
+          group_key = [
+              metadata['method'],
+              metadata['game'],
+              metadata['intrinsic_reward_lambda'],
+              metadata['learn_strategy']
+          ]
+          
+          # Create base method name
+          method_name = f"{metadata['method']}_lambda{metadata['intrinsic_reward_lambda']}"
+          
+          # Add scheduling strategy if it exists
+          if 'scheduling_strategy' in metadata:
+              group_key.append(metadata['scheduling_strategy'])
+              method_name += f"_scheduling_strategy_{metadata['scheduling_strategy']}"
+          
+          # Convert group key to tuple for hashing
+          group_key = tuple(group_key)
+      else:  # default or optimized_replay_buffer
+          group_key = (
+              metadata['method'],
+              metadata['game']
+          )
+          method_name = metadata['method']
+      
+      if group_key not in grouped_runs:
+          grouped_runs[group_key] = []
+      
+      grouped_runs[group_key].append({
+          'file': run_file,
+          'metrics_file': metrics_file,
+          'metadata': metadata,
+          'method_name': method_name
+      })
+  
+  return grouped_runs
 
 
 def main(args):
     # Find and group runs
     grouped_runs = find_and_group_runs(args.logdir, args.pattern)
     
+    # Filter runs based on method filter if specified
+    if args.method_filter and args.method_filter != 'all':
+        filtered_runs = {}
+        for group_key, runs in grouped_runs.items():
+            # Check if the method matches the filter
+            method = runs[0]['metadata']['method']
+            if args.method_filter == method:
+                filtered_runs[group_key] = runs
+        grouped_runs = filtered_runs
+        
+        if not grouped_runs:
+            print(f"No runs found matching method filter: {args.method_filter}")
+            return
+    
+    # Always process scores
+    process_scores(grouped_runs, args)
+    
+    # Process each requested metric
+    if isinstance(args.metrics, str):
+        metrics = [args.metrics]
+    else:
+        metrics = args.metrics
+    
+    for metric in metrics:
+        process_metric(grouped_runs, args, metric)
+
+
+def process_scores(grouped_runs, args):
+    """Process and plot score data."""
+    print("\n=== Processing Score Data ===")
+    
     # Create a dictionary to store all runs by game
     games_data = {}
     
     # Process each group and organize by game
     for group_key, runs in grouped_runs.items():
-        method = runs[0]['method_name']  # Use the method name with lambda if applicable
-        game = group_key[1]
+        method = runs[0]['method_name']
+        game = runs[0]['metadata']['game']
         
-        print(f"Processing group: {game}_{method} with {len(runs)} runs")
+        print(f"Processing scores for: {game}_{method} with {len(runs)} runs")
         
         # Load data from each run
         records = []
         filenames = []
+        
         for run in runs:
             records.append({
                 'task': game,
-                'method': method,  # Method name already includes lambda if needed
+                'method': method,
                 'seed': run['metadata']['seed']
             })
             filenames.append(run['file'])
         
-        # Load run data
+        if not filenames:
+            print(f"No score files found for {game}_{method}")
+            continue
+        
+        # Load run data using the regular loader for scores
+        # Don't use ythres for scores - we want the actual values
         load = functools.partial(
-            load_run, xkeys=args.xkeys, ykeys=args.ykeys, ythres=args.ythres)
+            load_run, xkeys=args.xkeys, ykeys=['episode/score'])
         
         if args.workers:
             with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
@@ -596,9 +747,9 @@ def main(args):
         # Filter out failed loads
         valid_data = [(rec, run) for rec, run in zip(records, loaded_runs) if run]
         if not valid_data:
-            print(f"No valid data for group {game}_{method}")
+            print(f"No valid score data for group {game}_{method}")
             continue
-            
+        
         records, loaded_runs = zip(*valid_data)
         
         # Update records with data
@@ -615,46 +766,144 @@ def main(args):
     for game, records in games_data.items():
         if not records:
             continue
-            
-        print(f"Creating plots for game: {game}")
-        
-        # Create DataFrame for this game
+        print(f"Creating score plots for game: {game}")
         df = pd.DataFrame(records)
+        df = bin_runs(df, args)
+        stats = comp_stats(df, args)
+        plot_runs(df, stats, args, title=f"{game}/scores/performance")
+
+
+def process_metric(grouped_runs, args, metric_key):
+    """Process and plot a specific metric."""
+    print(f"\n=== Processing Metric: {metric_key} ===")
+    
+    # Create a dictionary to store all runs by game
+    games_data = {}
+    
+    # Process each group and organize by game
+    for group_key, runs in grouped_runs.items():
+        method = runs[0]['method_name']
+        game = runs[0]['metadata']['game']
         
-        # Bin runs
+        print(f"Processing {metric_key} for: {game}_{method} with {len(runs)} runs")
+        
+        # Load data from each run
+        records = []
+        filenames = []
+        
+        for run in runs:
+            metrics_file = run['metrics_file']
+            if metrics_file.exists():
+                records.append({
+                    'task': game,
+                    'method': method,
+                    'seed': run['metadata']['seed']
+                })
+                filenames.append(metrics_file)
+            else:
+                print(f"Metrics file not found: {metrics_file}")
+        
+        if not filenames:
+            print(f"No metrics files found for {game}_{method}")
+            continue
+        
+        # Use metrics loader for the specific metric
+        load = functools.partial(load_metrics_data, key=metric_key)
+        
+        if args.workers:
+            with concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
+                loaded_runs = list(tqdm.tqdm(pool.map(load, filenames), total=len(filenames)))
+        else:
+            loaded_runs = list(tqdm.tqdm((load(x) for x in filenames), total=len(filenames)))
+        
+        # Filter out failed loads
+        valid_data = [(rec, run) for rec, run in zip(records, loaded_runs) if run]
+        if not valid_data:
+            print(f"No valid {metric_key} data for group {game}_{method}")
+            continue
+        
+        records, loaded_runs = zip(*valid_data)
+        
+        # Update records with data
+        for record, (xs, ys) in zip(records, loaded_runs):
+            record.update(xs=xs, ys=ys)
+        
+        # Add to the game's data collection
+        if game not in games_data:
+            games_data[game] = []
+        
+        games_data[game].extend(records)
+    
+    for game, records in games_data.items():
+        if not records:
+            continue
+        
+        print(f"Creating {metric_key} plots for game: {game}")
+        df = pd.DataFrame(records)
         df = bin_runs(df, args)
         
-        # Compute stats
-        stats = comp_stats(df, args)
+        # Create a simple class to hold the args with all necessary attributes
+        class MetricArgs:
+            def __init__(self, original_args):
+                # Ensure all attributes from args are copied
+                self.cols = getattr(original_args, 'cols', 0)
+                self.xlim = getattr(original_args, 'xlim', 0)
+                self.ylim = getattr(original_args, 'ylim', 0)
+                self.xticks = getattr(original_args, 'xticks', 4)
+                self.yticks = getattr(original_args, 'yticks', 4)
+                self.stats = ['mean'] 
+                
+                # Copy any other attributes that might be needed
+                self.binsize = getattr(original_args, 'binsize', 0)
+                self.bins = getattr(original_args, 'bins', 30)
+                self.legendcols = getattr(original_args, 'legendcols', 0)
+                self.size = getattr(original_args, 'size', [3, 3])
+                self.outdir = getattr(original_args, 'outdir', 'plots')
         
-        # Plot
-        plot_runs(df, stats, args, title=game)
+        metric_args = MetricArgs(args)
+        stats = comp_stats(df, metric_args)
+        metric_name = metric_key.replace('/', '_').replace('.', '_')
+        plot_runs(df, stats, metric_args, title=f"{game}/metrics/{metric_name}")
 
 
 if __name__ == '__main__':
-    main(elements.Flags(
-        logdir='SCRATCH/scur2603logdir/',
-        pattern='**/scores.jsonl',
-        indirs=[''],
-        outdir='plots',
-        methods='.*',
-        tasks='.*',
-        newstyle=True,
-        indir_prefix=False,
-        workers=16,
-        xkeys=['xs', 'step'],
-        ykeys=['ys', 'episode/score'],
-        ythres=0.0,
-        xlim=0,
-        ylim=0,
-        binsize=0,
-        bins=30,
-        cols=0,
-        legendcols=0,
-        size=[3, 3],
-        xticks=4,
-        yticks=10,
-        stats=['mean'],
-        agg=True,
-        todf='',
-    ).parse())
+    print("Starting plot.py script...")
+    try:
+        args = elements.Flags(
+            logdir='logdir/',
+            pattern='**/scores.jsonl',
+            indirs=[''],
+            outdir='plots',
+            methods='.*',
+            tasks='.*',
+            newstyle=True,
+            indir_prefix=False,
+            workers=16,
+            xkeys=['xs', 'step'],
+            ykeys=['ys', 'episode/score'],
+            ythres=0.0,
+            xlim=0,
+            ylim=0,
+            binsize=0,
+            bins=30,
+            cols=0,
+            legendcols=0,
+            size=[3, 3],
+            xticks=4,
+            yticks=10,
+            stats=['mean'],
+            agg=True,
+            todf='',
+            # List of metrics to plot (in addition to scores)
+            metrics=['train/loss/rew', 'train/loss/value', 'train/loss/dyn', 'train/loss/image'],
+            # Method filter - can be 'all', 'default', 'latent_reward_disagreement', or 'optimized_replay_buffer'
+            method_filter='all',
+        ).parse()
+        
+        print(f"Arguments parsed: {args}")
+        main(args)
+        print("Script completed successfully")
+    except Exception as e:
+        print(f"ERROR: Script failed with exception: {e}")
+        import traceback
+        traceback.print_exc()

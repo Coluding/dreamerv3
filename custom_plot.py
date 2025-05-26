@@ -67,7 +67,7 @@ def get_run_metadata(run_dir):
   # Add method-specific grouping parameters
   if 'latent_reward_disagreement' in method:
       intrinsic = config.get('agent', {}).get('intrinsic', {})
-      metadata['learn_strategy'] = intrinsic.get('learn_strategy', 'unknown')
+      #metadata['learn_strategy'] = intrinsic.get('learn_strategy', 'unknown')
       metadata['scheduling_strategy'] = intrinsic.get('scheduling_strategy', 'none')
   
   return metadata
@@ -371,6 +371,26 @@ def plot_runs(df, stats, args, title=None):
   bigger_size = (6, 5)  
   fig, axes = plots(total, cols, bigger_size)
   
+  # Create a mapping for display names (just replace underscores with spaces)
+  method_display_names = {}
+  for method in methods:
+      # Start with the original method name
+      display_name = method
+      
+      # Remove scheduling_strategy_ and handle the 'none' case
+      if 'scheduling_strategy_' in display_name:
+          # If it's "scheduling_strategy_none", remove it completely
+          if 'scheduling_strategy_none' in display_name:
+              display_name = display_name.replace('_scheduling_strategy_none', '')
+          else:
+              # Otherwise just remove the prefix but keep the strategy name
+              display_name = display_name.replace('scheduling_strategy_', '')
+      
+      # Replace underscores with spaces for readability
+      display_name = display_name.replace('_', ' ')
+      
+      method_display_names[method] = display_name
+  
   # Check if we should consider auto scaling - default to True for loss metrics
   consider_auto_scale = True
   if hasattr(args, 'consider_auto_scale'):
@@ -432,8 +452,10 @@ def plot_runs(df, stats, args, title=None):
           for i, (seed, seed_data) in enumerate(method_df.groupby('seed')):
               xs = seed_data['xs'].iloc[0]
               ys = seed_data['ys'].iloc[0]
-              # Replace underscores with spaces in the label
-              label = f"{method.replace('_', ' ')} (seed {seed})"
+              
+              # Use shortened display name for legend
+              display_method = method_display_names[method]
+              label = f"{display_method} (seed {seed})"
               
               # Use different line styles for different seeds
               linestyle = ['-', '--', ':', '-.'][i % 4]
@@ -538,6 +560,9 @@ def plot_runs(df, stats, args, title=None):
                   xs = sub['xs'].iloc[0]
                   ys = sub['ys'].iloc[0]
                   
+                  # Use shortened display name for legend - IMPORTANT: Use the same display names for stat plots
+                  display_method = method_display_names[method]
+                  
                   # For Mean plot, add variance shading
                   if sname == 'Mean':
                       # Aggregate variance across tasks
@@ -553,18 +578,12 @@ def plot_runs(df, stats, args, title=None):
                       if all_lo and all_hi:
                           lo = nanmean(np.stack(all_lo), axis=0)
                           hi = nanmean(np.stack(all_hi), axis=0)
-                          # Replace underscores with spaces in the label
-                          label = method.replace('_', ' ')
-                          curve(ax, xs, ys, lo, hi, label, i)
+                          curve(ax, xs, ys, lo, hi, display_method, i)
                       else:
-                          # Replace underscores with spaces in the label
-                          label = method.replace('_', ' ')
-                          curve(ax, xs, ys, None, None, label, i)
+                          curve(ax, xs, ys, None, None, display_method, i)
                   else:
                       # For other stats, no variance shading
-                      # Replace underscores with spaces in the label
-                      label = method.replace('_', ' ')
-                      curve(ax, xs, ys, None, None, label, i)
+                      curve(ax, xs, ys, None, None, display_method, i)
               except (KeyError, ValueError) as e:
                   print(f"Error plotting stats for method '{method}' on '{sname}': {e}")
                   continue
@@ -734,12 +753,11 @@ def find_and_group_runs(logdir, pattern="**/scores.jsonl", metrics="metrics.json
           # Create base group key
           group_key = [
               metadata['method'],
-              metadata['game'],
-              metadata['learn_strategy']
+              metadata['game']
           ]
           
           # Create base method name
-          method_name = f"{metadata['method']}_{metadata['learn_strategy']}"
+          method_name = f"{metadata['method']}"
           
           # Add scheduling strategy if it exists
           if 'scheduling_strategy' in metadata:

@@ -67,10 +67,7 @@ def get_run_metadata(run_dir):
   # Add method-specific grouping parameters
   if 'latent_reward_disagreement' in method:
       intrinsic = config.get('agent', {}).get('intrinsic', {})
-      metadata['intrinsic_reward_lambda'] = intrinsic.get('intrinsic_reward_lambda', 0)
       metadata['learn_strategy'] = intrinsic.get('learn_strategy', 'unknown')
-      
-      # Check for scheduling strategy
       metadata['scheduling_strategy'] = intrinsic.get('scheduling_strategy', 'none')
   
   return metadata
@@ -373,7 +370,17 @@ def plot_runs(df, stats, args, title=None):
   
   bigger_size = (6, 5)  
   fig, axes = plots(total, cols, bigger_size)
-
+  
+  # Check if we should consider auto scaling - default to True for loss metrics
+  consider_auto_scale = True
+  if hasattr(args, 'consider_auto_scale'):
+      consider_auto_scale = args.consider_auto_scale
+  elif title and not ('loss' in title.lower()):
+      consider_auto_scale = False  # Don't auto-scale for non-loss metrics like scores
+      
+  # Set threshold for log scaling - use a lower threshold for image loss
+  log_scale_ratio_threshold = 5.0  # Apply log scale when max/min > 5
+  
   # For game-specific plots, show individual seeds with different colors
   for task, ax in zip(tasks, axes[:len(tasks)]):
       style(ax, xticks=args.xticks, yticks=args.yticks)
@@ -381,6 +388,31 @@ def plot_runs(df, stats, args, title=None):
       ax.set_title(title_text, fontsize=14)  # Larger title font
       args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
       args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
+      
+      # Auto-determine if log scale is needed for this task
+      if consider_auto_scale:
+          task_df = df[df['task'] == task]
+          all_ys = []
+          for _, row in task_df.iterrows():
+              ys = row['ys']
+              valid_ys = ys[np.isfinite(ys)]
+              if len(valid_ys) > 0:
+                  all_ys.extend(valid_ys)
+          
+          if all_ys:
+              min_val = np.min(all_ys)
+              max_val = np.max(all_ys)
+              
+              # Only use log scale if:
+              # 1. All values are positive (required for log scale)
+              # 2. The ratio between max and min exceeds our threshold
+              if min_val > 0:
+                  ratio = max_val / min_val
+                  orders_of_magnitude = np.log10(ratio)
+                  if ratio > log_scale_ratio_threshold:
+                      ax.set_yscale('log')
+                      print(f"Applied log scale to {task} (ratio: {ratio:.1f}, orders: {orders_of_magnitude:.1f})")
+      
       task_df = df[df['task'] == task]
       
       # Group by method first to ensure consistent colors per method
@@ -400,7 +432,8 @@ def plot_runs(df, stats, args, title=None):
           for i, (seed, seed_data) in enumerate(method_df.groupby('seed')):
               xs = seed_data['xs'].iloc[0]
               ys = seed_data['ys'].iloc[0]
-              label = f"{method} (seed {seed})"
+              # Replace underscores with spaces in the label
+              label = f"{method.replace('_', ' ')} (seed {seed})"
               
               # Use different line styles for different seeds
               linestyle = ['-', '--', ':', '-.'][i % 4]
@@ -412,7 +445,6 @@ def plot_runs(df, stats, args, title=None):
 
   # For stat plots (Mean, Self Mean), add variance shading
   if stats is not None:
-      # First, prepare data for variance calculation
       mean_data = {}
       for task in tasks:
           task_df = df[df['task'] == task]
@@ -437,8 +469,68 @@ def plot_runs(df, stats, args, title=None):
       grouped_stats = stats.groupby(['name', 'method'])
       for sname, ax in zip(snames, axes[len(tasks):]):
           style(ax, xticks=args.xticks, yticks=args.yticks, darker=True)
-          ax.set_title(sname, fontsize=14)  # Larger title font
+          
+          # Custom title for Mean plots
+          if sname == 'Mean':
+              # Extract game name from the title
+              game_name = ""
+              if title and '/' in title:
+                  game_name = title.split('/')[0]
+              
+              # Determine metric type from title or ykeys
+              metric_type = "metric"
+              if title and 'scores' in title:
+                  metric_type = "score"
+              elif title and 'metrics' in title:
+                  # Extract metric name from title
+                  if 'train_loss_rew' in title:
+                      metric_type = "reward loss"
+                  elif 'train_loss_value' in title:
+                      metric_type = "value loss"
+                  elif 'train_loss_dyn' in title:
+                      metric_type = "dynamics loss"
+                  elif 'train_loss_image' in title:
+                      metric_type = "image loss"
+                  elif 'loss' in title:
+                      metric_type = "loss"
+              
+              if game_name:
+                  title_text = f"Mean {metric_type} - {game_name.replace('_', ' ').title()}"
+              else:
+                  title_text = sname
+          else:
+              title_text = sname
+          
+          ax.set_title(title_text, fontsize=14)  # Larger title font
           args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
+          args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
+          
+          # Auto-determine if log scale is needed for this stat
+          if consider_auto_scale:
+              all_ys = []
+              for method in methods:
+                  try:
+                      sub = grouped_stats.get_group((sname, method))
+                      ys = sub['ys'].iloc[0]
+                      valid_ys = ys[np.isfinite(ys)]
+                      if len(valid_ys) > 0:
+                          all_ys.extend(valid_ys)
+                  except KeyError:
+                      continue
+              
+              if all_ys:
+                  min_val = np.min(all_ys)
+                  max_val = np.max(all_ys)
+                  
+                  # Only use log scale if:
+                  # 1. All values are positive (required for log scale)
+                  # 2. The ratio between max and min exceeds our threshold
+                  if min_val > 0:
+                      ratio = max_val / min_val
+                      orders_of_magnitude = np.log10(ratio)
+                      if ratio > log_scale_ratio_threshold:
+                          ax.set_yscale('log')
+                          print(f"Applied log scale to {sname} (ratio: {ratio:.1f}, orders: {orders_of_magnitude:.1f})")
           
           for i, method in enumerate(methods):
               try:
@@ -461,13 +553,18 @@ def plot_runs(df, stats, args, title=None):
                       if all_lo and all_hi:
                           lo = nanmean(np.stack(all_lo), axis=0)
                           hi = nanmean(np.stack(all_hi), axis=0)
-                          # For mean plots, just show method name (aggregated over seeds)
-                          curve(ax, xs, ys, lo, hi, method, i)
+                          # Replace underscores with spaces in the label
+                          label = method.replace('_', ' ')
+                          curve(ax, xs, ys, lo, hi, label, i)
                       else:
-                          curve(ax, xs, ys, None, None, method, i)
+                          # Replace underscores with spaces in the label
+                          label = method.replace('_', ' ')
+                          curve(ax, xs, ys, None, None, label, i)
                   else:
                       # For other stats, no variance shading
-                      curve(ax, xs, ys, None, None, method, i)
+                      # Replace underscores with spaces in the label
+                      label = method.replace('_', ' ')
+                      curve(ax, xs, ys, None, None, label, i)
               except (KeyError, ValueError) as e:
                   print(f"Error plotting stats for method '{method}' on '{sname}': {e}")
                   continue
@@ -638,12 +735,11 @@ def find_and_group_runs(logdir, pattern="**/scores.jsonl", metrics="metrics.json
           group_key = [
               metadata['method'],
               metadata['game'],
-              metadata['intrinsic_reward_lambda'],
               metadata['learn_strategy']
           ]
           
           # Create base method name
-          method_name = f"{metadata['method']}_lambda{metadata['intrinsic_reward_lambda']}"
+          method_name = f"{metadata['method']}_{metadata['learn_strategy']}"
           
           # Add scheduling strategy if it exists
           if 'scheduling_strategy' in metadata:
@@ -677,17 +773,17 @@ def main(args):
     grouped_runs = find_and_group_runs(args.logdir, args.pattern)
     
     # Filter runs based on method filter if specified
-    if args.method_filter and args.method_filter != 'all':
+    if args.method_filter and 'all' not in args.method_filter:
         filtered_runs = {}
         for group_key, runs in grouped_runs.items():
-            # Check if the method matches the filter
+            # Check if the method matches any in the filter list
             method = runs[0]['metadata']['method']
-            if args.method_filter == method:
+            if method in args.method_filter:
                 filtered_runs[group_key] = runs
         grouped_runs = filtered_runs
         
         if not grouped_runs:
-            print(f"No runs found matching method filter: {args.method_filter}")
+            print(f"No runs found matching method filters: {args.method_filter}")
             return
     
     # Always process scores
@@ -842,23 +938,24 @@ def process_metric(grouped_runs, args, metric_key):
         df = pd.DataFrame(records)
         df = bin_runs(df, args)
         
-        # Create a simple class to hold the args with all necessary attributes
         class MetricArgs:
             def __init__(self, original_args):
-                # Ensure all attributes from args are copied
+                # Copy existing attributes
                 self.cols = getattr(original_args, 'cols', 0)
                 self.xlim = getattr(original_args, 'xlim', 0)
                 self.ylim = getattr(original_args, 'ylim', 0)
                 self.xticks = getattr(original_args, 'xticks', 4)
                 self.yticks = getattr(original_args, 'yticks', 4)
                 self.stats = ['mean'] 
-                
-                # Copy any other attributes that might be needed
                 self.binsize = getattr(original_args, 'binsize', 0)
                 self.bins = getattr(original_args, 'bins', 30)
                 self.legendcols = getattr(original_args, 'legendcols', 0)
                 self.size = getattr(original_args, 'size', [3, 3])
                 self.outdir = getattr(original_args, 'outdir', 'plots')
+                
+                # Consider auto-scaling for loss metrics
+                auto_log_scale = getattr(original_args, 'auto_log_scale', True)
+                self.consider_auto_scale = auto_log_scale and metric_key.startswith('train/loss')
         
         metric_args = MetricArgs(args)
         stats = comp_stats(df, metric_args)
@@ -896,8 +993,10 @@ if __name__ == '__main__':
             todf='',
             # List of metrics to plot (in addition to scores)
             metrics=['train/loss/rew', 'train/loss/value', 'train/loss/dyn', 'train/loss/image'],
-            # Method filter - can be 'all', 'default', 'latent_reward_disagreement', or 'optimized_replay_buffer'
-            method_filter='all',
+            # Method filter - can be 'all' or a list of methods: ['default', 'latent_reward_disagreement']
+            method_filter=['all'],
+            # Whether to consider auto log scaling 
+            auto_log_scale=True,
         ).parse()
         
         print(f"Arguments parsed: {args}")

@@ -359,8 +359,9 @@ class Agent(embodied.jax.Agent):
     inp = self.feat2tensor(imgfeat)
     rew = self.rew(inp, 2).pred()
     
-    intrinsic_mets = self._intrinsic_reward_lambda_step(rew)
-    metrics.update(intrinsic_mets)
+    if self.config.use_intrinsic:
+      intrinsic_mets = self._intrinsic_reward_lambda_step(rew)
+      metrics.update(intrinsic_mets)
 
     los, imgloss_out, mets = imag_loss(
         imgact,

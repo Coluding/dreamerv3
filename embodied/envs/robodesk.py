@@ -4,7 +4,11 @@ import embodied
 import elements
 import collections
 
-import robodesk_env
+if 'MUJOCO_GL' not in os.environ:
+  os.environ['MUJOCO_GL'] = 'egl'
+os.environ['EGL_DEVICE_ID'] = '0'
+
+from robodesk_env.robodesk import RoboDesk as RoboDeskEnv
 
 
 class RoboDesk(embodied.Env):
@@ -16,7 +20,7 @@ class RoboDesk(embodied.Env):
         assert aggregate in ('max', 'mean'), aggregate
         assert pooling >= 1, pooling
 
-        self._env = robodesk_env.RoboDesk(
+        self._env = RoboDeskEnv(
             task=task,
             reward=reward,
             action_repeat=repeat,

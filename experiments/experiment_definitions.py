@@ -6,9 +6,10 @@ import multiprocessing
 
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
-DEFAULT_DATASETS = {"dmc_vision"} # , {"atari100k"}
+DEFAULT_DATASETS = {"robodesk"} # {"dmc_vision"}, {"atari100k"}
 # ATARI_TASKS = {"atari100k_battle_zone"} # , "atari100k_krull"
-DMC_TASKS = {"dmc_cup_catch"} # "dmc_reacher_hard", 
+# DMC_TASKS = {"dmc_cup_catch"} # "dmc_reacher_hard", 
+ROBODESK_TASKS = {"robodesk_open_slide"}
 
 
 def run_experiment(
@@ -18,7 +19,7 @@ def run_experiment(
         num_seeds: int = 1,
         results_csv_path: str = RESULTS_CSV_PATH,
         datasets: Iterable = DEFAULT_DATASETS,
-        tasks: Iterable = DMC_TASKS,
+        tasks: Iterable = ROBODESK_TASKS,
     ) -> None:
     """
     Run an experiment.
@@ -73,7 +74,7 @@ def make_run(
     argv = []
     for key, value in run_config.items():
         argv.extend([f'--{key}', str(value)])
-    argv.extend(['--seed', str(1)]) # TODO replace 1 with seed again
+    argv.extend(['--seed', str(seed)])
 
     # Now call the main function
     main(argv=argv, experiment=experiment)

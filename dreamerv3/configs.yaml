@@ -134,10 +134,10 @@ defaults:
       imag_horizon: 15
       reward_type: disagreement # prediction_error, disagreement, max_disagreement
       intrinsic_reward_lambda: 1.0
-      scheduling_strategy: 'slope_ema' # exp_decay, fixed
-      ema_decay: 0.85
-      ema_storage_size: 5000
-      max_steps: -1
+      scheduling_strategy: 'slope_ema' # slope_ema, exp_decay, fixed
+      ema_decay: 0.9
+      ema_storage_size: 1500
+      max_steps: 45000
       intrinsic_lambda_fixed: 0.5
 
 size1m: &size1m

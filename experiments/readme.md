@@ -56,10 +56,8 @@ python custom_plot.py --metrics train/loss/rew train/loss/value
 
 # Include self-normalized statistics
 python custom_plot.py --stats mean self_mean
+
+# To disable automatic log scaling for loss metrics
+python custom_plot.py --auto_log_scale False
 ```
 
-### Tips
-
-- When using `--method_filter`, separate values with spaces (not commas)
-- Use `--auto_log_scale False` to disable automatic log scaling for loss metrics
-- Use `--method_filter all` to include all methods (default behavior)

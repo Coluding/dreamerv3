@@ -27,3 +27,39 @@ python experiments/tables.py
 ```
 To include/exclude metrics from the table, modify the default argument of the `process_experiment_results` function in `tables.py`. To include experiments, add/remove the names of the experiments from the `experiment_names` default argument set. The result is printed to the commandline.
 <br>
+
+# Custom Plotting Tool 
+
+The `custom_plot.py` script provides visualization capabilities for experiment results, supporting both score metrics and training losses.
+
+### Basic Usage
+
+```bash
+python custom_plot.py --logdir path/to/logs/ --outdir plots/
+```
+
+### Key Features
+
+- Automatically discovers and groups runs by method, game, and seed
+- Plots individual runs and statistical aggregates (mean, median)
+- Supports multiple metrics visualization (scores and various loss types)
+- Auto-scales y-axis based on data range (log scale for loss metrics)
+
+### Options
+
+```bash
+# Filter by specific methods 
+python custom_plot.py --method_filter default latent_reward_disagreement
+
+# Specify custom metrics to plot
+python custom_plot.py --metrics train/loss/rew train/loss/value
+
+# Include self-normalized statistics
+python custom_plot.py --stats mean self_mean
+```
+
+### Tips
+
+- When using `--method_filter`, separate values with spaces
+- Use `--auto_log_scale False` to disable automatic log scaling for loss metrics
+- Use `--method_filter all` to include all methods (default behavior)

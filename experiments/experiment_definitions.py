@@ -6,9 +6,9 @@ import multiprocessing
 
 
 RESULTS_CSV_PATH = "artifacts/results.csv"
-DEFAULT_DATASETS = {"dmc_vision"} # {"atari100k"}
-# ATARI_TASKS = {"atari100k_battle_zone", "atari100k_krull"}
-DMC_TASKS = {"dmc_reacher_hard", "dmc_cup_catch"}
+DEFAULT_DATASETS = {"dmc_vision"} # , {"atari100k"}
+# ATARI_TASKS = {"atari100k_battle_zone"} # , "atari100k_krull"
+DMC_TASKS = {"dmc_cup_catch"} # "dmc_reacher_hard", 
 
 
 def run_experiment(
@@ -73,7 +73,7 @@ def make_run(
     argv = []
     for key, value in run_config.items():
         argv.extend([f'--{key}', str(value)])
-    argv.extend(['--seed', str(seed)])
+    argv.extend(['--seed', str(1)]) # TODO replace 1 with seed again
 
     # Now call the main function
     main(argv=argv, experiment=experiment)
@@ -114,6 +114,34 @@ def run_replay_buffer_experiment(
 
 def run_latent_disagreement_experiment(
         run_config: dict = REPLAY_LATENT_DISAGREEMENT_CFG,
+        name: str = "Latent Disagreement", 
+        description: str = "Using the latent disagreement method to guide exploration - the mean+variance variant.",
+        num_seeds: int = 2,
+        datasets: Iterable = DEFAULT_DATASETS,
+    ) -> None:
+    """
+    Running the Dreamer with latent disagreement.
+    """
+
+    run_experiment(run_config, name, description, num_seeds, datasets=datasets)
+
+
+def run_latent_disagreement_experiment_ema(
+        run_config: dict = REPLAY_LATENT_DISAGREEMENT_CFG_EMA,
+        name: str = "Latent Disagreement", 
+        description: str = "Using the latent disagreement method to guide exploration - the mean+variance variant.",
+        num_seeds: int = 2,
+        datasets: Iterable = DEFAULT_DATASETS,
+    ) -> None:
+    """
+    Running the Dreamer with latent disagreement.
+    """
+
+    run_experiment(run_config, name, description, num_seeds, datasets=datasets)
+
+
+def run_latent_disagreement_experiment_exp_decay(
+        run_config: dict = REPLAY_LATENT_DISAGREEMENT_CFG_EXP_DECAY,
         name: str = "Latent Disagreement", 
         description: str = "Using the latent disagreement method to guide exploration - the mean+variance variant.",
         num_seeds: int = 2,

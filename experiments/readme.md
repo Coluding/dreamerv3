@@ -60,6 +60,6 @@ python custom_plot.py --stats mean self_mean
 
 ### Tips
 
-- When using `--method_filter`, separate values with spaces
+- When using `--method_filter`, separate values with spaces (not commas)
 - Use `--auto_log_scale False` to disable automatic log scaling for loss metrics
 - Use `--method_filter all` to include all methods (default behavior)

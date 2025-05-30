@@ -371,6 +371,11 @@ def plot_runs(df, stats, args, title=None):
   bigger_size = (6, 5)  
   fig, axes = plots(total, cols, bigger_size)
   
+  # Font sizes 
+  tick_fontsize = getattr(args, 'tick_fontsize', 12)
+  title_fontsize = getattr(args, 'title_fontsize', 16)
+  legend_fontsize = getattr(args, 'legend_fontsize', 10)
+  
   # Create a mapping for display names (just replace underscores with spaces)
   method_display_names = {}
   for method in methods:
@@ -403,9 +408,10 @@ def plot_runs(df, stats, args, title=None):
   
   # For game-specific plots, show individual seeds with different colors
   for task, ax in zip(tasks, axes[:len(tasks)]):
-      style(ax, xticks=args.xticks, yticks=args.yticks)
+      style(ax, xticks=args.xticks, yticks=args.yticks, tick_fontsize=tick_fontsize)
       title_text = task.replace('_', ' ').replace(':', ' ').title()
-      ax.set_title(title_text, fontsize=14)  # Larger title font
+      ax.set_title(title_text, fontsize=title_fontsize)
+      
       args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
       args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
       
@@ -463,7 +469,7 @@ def plot_runs(df, stats, args, title=None):
       
       # Add legend to each individual plot
       if len(ax.get_legend_handles_labels()[0]) > 0:
-          ax.legend(fontsize=8, loc='best', framealpha=0.7)
+          ax.legend(fontsize=legend_fontsize, loc='best', framealpha=0.7)
 
   # For stat plots (Mean, Self Mean), add variance shading
   if stats is not None:
@@ -490,7 +496,7 @@ def plot_runs(df, stats, args, title=None):
       # Now plot the stat plots with variance
       grouped_stats = stats.groupby(['name', 'method'])
       for sname, ax in zip(snames, axes[len(tasks):]):
-          style(ax, xticks=args.xticks, yticks=args.yticks, darker=True)
+          style(ax, xticks=args.xticks, yticks=args.yticks, darker=True, tick_fontsize=tick_fontsize)
           
           # Custom title for Mean plots
           if sname == 'Mean':
@@ -523,7 +529,7 @@ def plot_runs(df, stats, args, title=None):
           else:
               title_text = sname
           
-          ax.set_title(title_text, fontsize=14)  # Larger title font
+          ax.set_title(title_text, fontsize=title_fontsize)
           args.xlim and ax.set_xlim(0, 1.03 * args.xlim)
           args.ylim and ax.set_ylim(0, 1.03 * args.ylim)
           
@@ -590,9 +596,9 @@ def plot_runs(df, stats, args, title=None):
           
           # Add legend to each stat plot
           if len(ax.get_legend_handles_labels()[0]) > 0:
-              ax.legend(fontsize=8, loc='best', framealpha=0.7)
+              ax.legend(fontsize=legend_fontsize, loc='best', framealpha=0.7)
 
-  # Save the figure
+  # Save the figure with tight layout to reduce whitespace
   if title:
       plt.tight_layout()
       filename = f"{args.outdir}/{title}.png"
@@ -614,9 +620,10 @@ def plots(amount, cols=4, size=(3, 3), **kwargs):
   return fig, ax
 
 
-def style(ax, xticks=4, yticks=4, grid=(1, 1), logx=False, darker=False):
-  ax.tick_params(axis='x', which='major', length=2, labelsize=10, pad=3)
-  ax.tick_params(axis='y', which='major', length=2, labelsize=10, pad=2)
+def style(ax, xticks=4, yticks=4, grid=(1, 1), logx=False, darker=False, 
+          tick_fontsize=12, label_fontsize=14):
+  ax.tick_params(axis='x', which='major', length=2, labelsize=tick_fontsize, pad=3)
+  ax.tick_params(axis='y', which='major', length=2, labelsize=tick_fontsize, pad=2)
   ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(xticks))
   ax.yaxis.set_major_locator(mpl.ticker.MaxNLocator(yticks))
   ax.xaxis.set_major_formatter(lambda x, pos: natfmt(x))
@@ -971,6 +978,11 @@ def process_metric(grouped_runs, args, metric_key):
                 self.size = getattr(original_args, 'size', [3, 3])
                 self.outdir = getattr(original_args, 'outdir', 'plots')
                 
+                # Copy font size parameters
+                self.tick_fontsize = getattr(original_args, 'tick_fontsize', 12)
+                self.title_fontsize = getattr(original_args, 'title_fontsize', 16)
+                self.legend_fontsize = getattr(original_args, 'legend_fontsize', 10)
+                
                 # Consider auto-scaling for loss metrics
                 auto_log_scale = getattr(original_args, 'auto_log_scale', True)
                 self.consider_auto_scale = auto_log_scale and metric_key.startswith('train/loss')
@@ -1015,6 +1027,10 @@ if __name__ == '__main__':
             method_filter=['all'],
             # Whether to consider auto log scaling 
             auto_log_scale=True,
+            # Font sizes for plot elements
+            tick_fontsize=12,
+            title_fontsize=16,
+            legend_fontsize=10,
         ).parse()
         
         print(f"Arguments parsed: {args}")

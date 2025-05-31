@@ -1,112 +1,155 @@
-# Mastering Diverse Domains through World Models
+# DreamerV3-XP: Optimizing Exploration through Uncertainty Estimation
 
-A reimplementation of [DreamerV3][paper], a scalable and general reinforcement
-learning algorithm that masters a wide range of applications with fixed
-hyperparameters.
+# DreamerV3-XP
+## Introduction
+DreamerV3-XP is an advanced model-based reinforcement learning (RL) agent, built upon the foundational architecture of DreamerV3. Our work specifically addresses two key areas to enhance exploration efficiency and accelerate learning in complex environments. This project extends DreamerV3 by incorporating intrinsic exploration mechanisms and optimized replay sampling strategies.
 
-![DreamerV3 Tasks](https://user-images.githubusercontent.com/2111293/217647148-cbc522e2-61ad-4553-8e14-1ecdc8d9438b.gif)
+## Motivations
+- **No structured exploration**: The vanilla agent is driven by acting based on the environment rewards, learning can stall in environments where rewards are rare or delayed.
+- **Uniform sampling from the replay buffer**: Uniform sampling dilutes important learning signals from the most informative experiences, resulting in slower training. This motivation assumes that there are trajectories that are more informative than others.
 
-If you find this code useful, please reference in your paper:
+## Project Components
+- **DreamerV3 Base:**
+  - **World Model:** A Recurrent State-Space Model (RSSM) that learns a compact latent representation of the environment, enabling efficient planning through imagination.
+  - **Actor-Critic Framework:** Policy optimization in latent space based on trajectories imagined by the world model.
 
+- **DreamerV3-XP Extensions:**
+  1. **Prioritized Replay Buffer:**
+     - Incorporates trajectory prioritization based on task return, reconstruction loss, and value prediction error.
+     - Emphasizes sampling informative trajectories to enhance learning efficiency.
+
+  2. **Intrinsic Reward (Latent Reward Disagreement):**
+     - Employs an ensemble of world models to estimate uncertainty through variance in reward predictions.
+     - Encourages exploration of trajectories that are uncertain yet promising.
+
+## Methods
+### World Model
+The RSSM model uses deterministic $h_t$ and stochastic $z_t$ components to encode environmental dynamics. Predictions about future states, rewards, and continuation probabilities are generated from these latent representations. The model is trained via a Variational Autoencoder (VAE) approach, optimized with ELBO loss.
+
+### Intrinsic Reward Mechanism
+Intrinsic rewards are calculated from ensemble disagreement in reward predictions:
+
+$`r^{intr}_t = \frac{1}{L} \sum_{t'=t}^{t+L} \left[\bar{r}_{t'} + \frac{1}{K}\sum_{k=1}^{K}(\hat{r}_{k,t'} - \bar{r}_{t'})^2\right]`$
+
+Where:
+- $\bar{r}_{t'}$ is the mean reward prediction.
+- $\hat{r}_{k,t'}$ is the reward predicted by the $k^{th}$ ensemble member.
+
+The final reward is a convex combination of intrinsic and extrinsic rewards:
+
+$r^{total}_t = \lambda r^{ext}_t + (1-\lambda)r^{intr}_t$
+
+### Dynamic Reward Weighting
+We dynamically adjust $\lambda$, the weight balancing intrinsic and extrinsic rewards, using either exponential decay or a moving average of episode returns to encourage exploration when beneficial.
+
+### Optimized Replay Buffer
+Trajectory prioritization leverages three metrics:
+- Task return $R_i$
+- Reconstruction error $\epsilon_i$
+- Critic value error $\delta_i$
+
+The priority score $s_i$ is computed as:
+
+$s_i = (\lambda_r + \lambda_\delta \delta_i) R_i + \lambda_\epsilon \epsilon_i$
+
+## Results and Performance
+Evaluations on selected tasks from Atari100k and DeepMind Control Visual Benchmark demonstrate that DreamerV3-XP:
+- Confirms the baseline performance of DreamerV3.
+- Improves learning speed, especially in sparse-reward environments.
+- Achieves consistently lower dynamics and prediction errors due to prioritized replay and intrinsic reward-driven exploration.
+
+## Related Work
+DreamerV3-XP is inspired by:
+- **Plan2Explore:** Leveraging ensemble disagreement for intrinsic motivation.
+- **Prioritized Experience Replay (PER):** Adaptive trajectory sampling to boost learning efficiency.
+
+## Strengths
+- Robust latent dynamics modeling and efficient planning.
+- Significantly enhanced exploration through uncertainty-driven intrinsic rewards.
+- Improved sample efficiency and faster convergence compared to uniform replay.
+
+## Contributions
+- Proposed a novel intrinsic reward formulation utilizing ensemble disagreement to enhance exploration.
+- Developed and integrated an optimized replay buffer strategy to effectively prioritize informative trajectories.
+- Empirically validated improvements on challenging RL benchmarks.
+
+## Conclusion
+DreamerV3-XP provides an efficient and exploration-driven extension of DreamerV3, demonstrating significant improvements in exploration, sample efficiency, and model accuracy. This framework represents a promising step toward more versatile and effective model-based RL agents.
+
+## Acknowledgments
+This work builds upon the foundational contributions of Dreamer, Plan2Explore, and Prioritized Experience Replay (PER), among other critical studies in model-based reinforcement learning.
+
+## References
+- Hafner, D. et al. DreamerV3 (2023)
+- Schaul, T. et al. Prioritized Experience Replay (2015)
+- Sekar, R. et al. Plan2Explore (2020)
+---
+<details>
+<summary>Click to toggle the section on how to run the experiments and reproduce our results</summary>
+
+# How to use the Experimental Framework
+The experimental framework is designed to serve as a single point of entry for running experiments in a well-documented and structured way - to avoid that information gets lost. It also allows to create aggregated tables for use in a paper.
+<br>
+<br>
+
+## Running Experiments
+The experiments/experiment_definitions.py package serves as a CLI for running experiments.
+The first argument is the name of the experiment function and the following arguments can be function arguments that should be passed to the experiment functions defined in experiment_definitions.py. The name of the run config is case insensitive. The structure works as follows:
 ```
-@article{hafner2023dreamerv3,
-  title={Mastering Diverse Domains through World Models},
-  author={Hafner, Danijar and Pasukonis, Jurgis and Ba, Jimmy and Lillicrap, Timothy},
-  journal={arXiv preprint arXiv:2301.04104},
-  year={2023}
-}
+python experiments/experiment_definitions.py experiment_function_name --optional_function_argument value
+```
+For instance, to run the standard experiment from the DreamerV3 Readme page:
+```
+python experiments/experiment_definitions.py run_standard_dreamer --name "Test Run to check functionality" --description "Just a run with 2 seeds for testing purposes" --num_seeds 2
+```
+<br>
+
+## Accessing the Results
+All results are stored in `dreamerv3/artifacts/results.csv`. It contains the content of the config file, the run config (preset) and all training metrics, logged at every single step.
+<br>
+<br>
+
+## Creating Tables
+To create tables that are aggregated over several runs of the same experiment using different seeds, you can use the tables CLI. To create a table from the results CLI, run:
+```
+python experiments/tables.py
+```
+To include/exclude metrics from the table, modify the default argument of the `process_experiment_results` function in `tables.py`. To include experiments, add/remove the names of the experiments from the `experiment_names` default argument set. The result is printed to the commandline.
+<br>
+
+# Custom Plotting Tool 
+
+The `custom_plot.py` script provides visualization capabilities for experiment results, supporting both score metrics and training losses.
+
+### Basic Usage
+
+```bash
+python custom_plot.py --logdir path/to/logs/ --outdir plots/
 ```
 
-To learn more:
+### Key Features
 
-- [Research paper][paper]
-- [Project website][website]
-- [Twitter summary][tweet]
+- Automatically discovers and groups runs by method, game, and seed
+- Plots individual runs and statistical aggregates (mean, median)
+- Supports multiple metrics visualization (scores and various loss types)
+- Auto-scales y-axis based on data range (log scale for loss metrics)
 
-## DreamerV3
+### Options
 
-DreamerV3 learns a world model from experiences and uses it to train an actor
-critic policy from imagined trajectories. The world model encodes sensory
-inputs into categorical representations and predicts future representations and
-rewards given actions.
+```bash
+# Filter by specific methods 
+python custom_plot.py --method_filter default latent_reward_disagreement
 
-![DreamerV3 Method Diagram](https://user-images.githubusercontent.com/2111293/217355673-4abc0ce5-1a4b-4366-a08d-64754289d659.png)
+# Specify custom metrics to plot
+python custom_plot.py --metrics train/loss/rew train/loss/value
 
-DreamerV3 masters a wide range of domains with a fixed set of hyperparameters,
-outperforming specialized methods. Removing the need for tuning reduces the
-amount of expert knowledge and computational resources needed to apply
-reinforcement learning.
+# Include self-normalized statistics
+python custom_plot.py --stats mean self_mean
 
-![DreamerV3 Benchmark Scores](https://github.com/danijar/dreamerv3/assets/2111293/0fe8f1cf-6970-41ea-9efc-e2e2477e7861)
-
-Due to its robustness, DreamerV3 shows favorable scaling properties. Notably,
-using larger models consistently increases not only its final performance but
-also its data-efficiency. Increasing the number of gradient steps further
-increases data efficiency.
-
-![DreamerV3 Scaling Behavior](https://user-images.githubusercontent.com/2111293/217356063-0cf06b17-89f0-4d5f-85a9-b583438c98dd.png)
-
-# Instructions
-
-The code has been tested on Linux and Mac and requires Python 3.11+.
-
-## Docker
-
-You can either use the provided `Dockerfile` that contains instructions or
-follow the manual instructions below.
-
-## Manual
-
-Install [JAX][jax] and then the other dependencies:
-
-```sh
-pip install -U -r requirements.txt
+# To disable automatic log scaling for loss metrics
+python custom_plot.py --auto_log_scale False
 ```
+</details>
 
-Training script:
 
-```sh
-python dreamerv3/main.py \
-  --logdir ~/logdir/{timestamp} \
-  --configs crafter \
-  --run.train_ratio 32
-```
 
-To reproduce results, train on the desired task using the corresponding config,
-such as `--configs atari --task atari_pong`.
-
-# Tips
-
-- All config options are listed in `dreamerv3/configs.yaml` and you can
-  override them as flags from the command line.
-- The `debug` config block reduces the network size, batch size, duration
-  between logs, and so on for fast debugging (but does not learn a good model).
-- By default, the code tries to run on GPU. You can switch to CPU or TPU using
-  the `--jax.platform cpu` flag.
-- You can use multiple config blocks that will override defaults in the
-  order they are specified, for example `--configs crafter size50m`.
-- By default, metrics are printed to the terminal, appended to a JSON lines
-  file, and written as Scope summaries. Other outputs like WandB and
-  TensorBoard can be enabled in the training script.
-- If you get a `Too many leaves for PyTreeDef` error, it means you're
-  reloading a checkpoint that is not compatible with the current config. This
-  often happens when reusing an old logdir by accident.
-- If you are getting CUDA errors, scroll up because the cause is often just an
-  error that happened earlier, such as out of memory or incompatible JAX and
-  CUDA versions. Try `--batch_size 1` to rule out an out of memory error.
-- Many environments are included, some of which require installing additional
-  packages. See the `Dockerfile` for reference.
-- To continue stopped training runs, simply run the same command line again and
-  make sure that the `--logdir` points to the same directory.
-
-# Disclaimer
-
-This repository contains a reimplementation of DreamerV3 based on the open
-source DreamerV2 code base. It is unrelated to Google or DeepMind. The
-implementation has been tested to reproduce the official results on a range of
-environments.
-
-[jax]: https://github.com/google/jax#pip-installation-gpu-cuda
-[paper]: https://arxiv.org/pdf/2301.04104v1.pdf
-[website]: https://danijar.com/dreamerv3
-[tweet]: https://twitter.com/danijarh/status/1613161946223677441

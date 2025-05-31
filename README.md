@@ -104,7 +104,7 @@ python experiments/experiment_definitions.py run_standard_dreamer --name "Test R
 <br>
 
 ## Accessing the Results
-All results are stored in `dreamerv3/artifacts/results.csv`. It contains the content of the config file, the run config (preset) and all training metrics, logged at every single step.
+After running experiments, all results are stored in `dreamerv3/artifacts/results.csv`. It contains the content of the config file, the run config (preset) and the last logs of all training metrics.
 <br>
 <br>
 

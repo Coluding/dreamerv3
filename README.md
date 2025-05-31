@@ -1,4 +1,27 @@
 # DreamerV3-XP: Optimizing Exploration through Uncertainty Estimation
+<div style="display: flex; justify-content: space-around; flex-wrap: wrap;">
+    <video width="200" autoplay muted>
+        <source src="videos/battle_zone.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <video width="200" autoplay muted>
+        <source src="videos/krull.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <video width="200" autoplay muted>
+        <source src="videos/boxing.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <video width="200" autoplay muted>
+        <source src="videos/cup_catch.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <video width="200" autoplay muted>
+        <source src="videos/reacher_hard.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+</div>
+
 
 ## Introduction
 DreamerV3 learns a world model from experiences and uses it to train an actor critic policy from imagined trajectories. The world model encodes sensory inputs into categorical representations and predicts future representations and rewards given actions. DreamerV3 represents a significant advancement in model-based reinforcement learning (RL), enabling powerful planning and decision-making via latent imagination in a Recurrent State-Space Model (RSSM). This model predicts future states, rewards, and continuation probabilities based purely on internal dynamics. However, the original DreamerV3 suffers from specific limitations, particularly uniform sampling of trajectories from the replay buffer and lack of directed exploration mechanisms, hindering efficient learning, especially in sparse-reward environments.

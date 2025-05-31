@@ -104,6 +104,7 @@ Evaluations on selected tasks from Atari100k and DeepMind Control Visual Benchma
 - Confirms the baseline performance of DreamerV3.
 - Improves learning speed, especially in sparse-reward environments.
 - Achieves consistently lower dynamics and prediction errors due to prioritized replay and intrinsic reward-driven exploration.
+- Please see the Reproduction, Optimized replay buffer and Latent reward disagreement section in `notebook.ipynb` to know how to reproduce our results.
 
 ## Strengths
 - Robust latent dynamics modeling and efficient planning.
@@ -120,7 +121,7 @@ DreamerV3-XP provides an efficient and exploration-driven extension of DreamerV3
 
 ---
 <details>
-<summary>Click to toggle the section on how to run the experiments and reproduce our results</summary>
+<summary>Click to toggle the section on how to use the experimental framework and run experiments with DreamerV3-XP</summary>
 
 # How to use the Experimental Framework
 The experimental framework is designed to serve as a single point of entry for running experiments in a well-documented and structured way - to avoid that information gets lost. It also allows to create aggregated tables for use in a paper.

@@ -1,6 +1,5 @@
 # DreamerV3-XP: Optimizing Exploration through Uncertainty Estimation
 
-# DreamerV3-XP
 ## Introduction
 DreamerV3-XP is an advanced model-based reinforcement learning (RL) agent, built upon the foundational architecture of DreamerV3. Our work specifically addresses two key areas to enhance exploration efficiency and accelerate learning in complex environments. This project extends DreamerV3 by incorporating intrinsic exploration mechanisms and optimized replay sampling strategies.
 

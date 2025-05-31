@@ -1,11 +1,36 @@
 # DreamerV3-XP: Optimizing Exploration through Uncertainty Estimation
 
 ## Introduction
-DreamerV3-XP is an advanced model-based reinforcement learning (RL) agent, built upon the foundational architecture of DreamerV3. Our work specifically addresses two key areas to enhance exploration efficiency and accelerate learning in complex environments. This project extends DreamerV3 by incorporating intrinsic exploration mechanisms and optimized replay sampling strategies.
+DreamerV3 learns a world model from experiences and uses it to train an actor critic policy from imagined trajectories. The world model encodes sensory inputs into categorical representations and predicts future representations and rewards given actions. DreamerV3 represents a significant advancement in model-based reinforcement learning (RL), enabling powerful planning and decision-making via latent imagination in a Recurrent State-Space Model (RSSM). This model predicts future states, rewards, and continuation probabilities based purely on internal dynamics. However, the original DreamerV3 suffers from specific limitations, particularly uniform sampling of trajectories from the replay buffer and lack of directed exploration mechanisms, hindering efficient learning, especially in sparse-reward environments.
 
-## Motivations
-- **No structured exploration**: The vanilla agent is driven by acting based on the environment rewards, learning can stall in environments where rewards are rare or delayed.
-- **Uniform sampling from the replay buffer**: Uniform sampling dilutes important learning signals from the most informative experiences, resulting in slower training. This motivation assumes that there are trajectories that are more informative than others.
+## Related Work
+### Related work of the original paper
+General-purpose RL algorithms aim for robustness and broad applicability:
+- **PPO**: Widely used, minimal tuning, but requires large data due to on-policy constraints.
+- **SAC**: Efficient via experience replay; however, sensitive to hyperparameter tuning and struggles with high-dimensional inputs.
+- **MuZero**: High-performance using complex components like MCTS and prioritized replay, increasing implementation complexity.
+- **Gato**: Unified model leveraging expert demonstrations, restricting tasks to those with available expert data.
+  
+Minecraft in RL Research:
+- **MALMO**: Open-source platform from Microsoft tailored for RL experiments.
+- **MineRL**: Competition framework offering standardized evaluation environments.
+- **MineDojo**: Extensive set of tasks with sparse rewards and descriptive language instructions.
+- **VPT**: Behavioral cloning with significant computational resources and human data; achieves diamond-collection but at substantial cost.
+  
+DreamerV3: Overcomes many previous limitations by mastering diverse tasks using fixed hyperparameters, achieving high performance efficiently from scratch without expert data.
+
+### Related work for our extensions
+DreamerV3-XP is based on:
+- **Plan2Explore:** Leveraging ensemble disagreement for intrinsic motivation.
+- **Prioritized Experience Replay (PER):** Adaptive trajectory sampling to boost learning efficiency.
+
+## Motivation: Strengths and Weaknesses of DreamerV3
+DreamerV3 excels in its latent imagination capabilities and sample efficiency compared to model-free approaches. Its robust latent dynamics modeling enables efficient policy optimization and planning. However, critical weaknesses exist:
+
+- **Uniform Trajectory Sampling:** Uniform replay buffer sampling does not account for trajectory informativeness, potentially slowing down learning.
+- **Undirected Exploration:** Sole reliance on extrinsic rewards limits exploratory behaviors, especially problematic in sparse-reward scenarios.
+
+These weaknesses motivated our group to develop extensions that enhance DreamerV3's exploration capabilities and improve sample efficiency.
 
 ## Project Components
 - **DreamerV3 Base:**
@@ -57,11 +82,6 @@ Evaluations on selected tasks from Atari100k and DeepMind Control Visual Benchma
 - Improves learning speed, especially in sparse-reward environments.
 - Achieves consistently lower dynamics and prediction errors due to prioritized replay and intrinsic reward-driven exploration.
 
-## Related Work
-DreamerV3-XP is inspired by:
-- **Plan2Explore:** Leveraging ensemble disagreement for intrinsic motivation.
-- **Prioritized Experience Replay (PER):** Adaptive trajectory sampling to boost learning efficiency.
-
 ## Strengths
 - Robust latent dynamics modeling and efficient planning.
 - Significantly enhanced exploration through uncertainty-driven intrinsic rewards.
@@ -75,13 +95,6 @@ DreamerV3-XP is inspired by:
 ## Conclusion
 DreamerV3-XP provides an efficient and exploration-driven extension of DreamerV3, demonstrating significant improvements in exploration, sample efficiency, and model accuracy. This framework represents a promising step toward more versatile and effective model-based RL agents.
 
-## Acknowledgments
-This work builds upon the foundational contributions of Dreamer, Plan2Explore, and Prioritized Experience Replay (PER), among other critical studies in model-based reinforcement learning.
-
-## References
-- Hafner, D. et al. DreamerV3 (2023)
-- Schaul, T. et al. Prioritized Experience Replay (2015)
-- Sekar, R. et al. Plan2Explore (2020)
 ---
 <details>
 <summary>Click to toggle the section on how to run the experiments and reproduce our results</summary>

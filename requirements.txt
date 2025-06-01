@@ -29,3 +29,6 @@ matplotlib
 imageio
 ipython
 scipy
+pandas
+ruamel.yaml
+

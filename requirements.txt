@@ -30,4 +30,5 @@ imageio
 ipython
 scipy
 pandas
+ruamel.yaml==0.18.10
 

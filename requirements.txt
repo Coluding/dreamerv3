@@ -1,4 +1,4 @@
-ale_py==0.9.0
+ale_py
 autorom[accept-rom-license]==0.6.1
 av
 chex~=0.1.89
@@ -31,4 +31,5 @@ ipython
 scipy
 pandas
 ruamel.yaml==0.18.10
+elements
 
